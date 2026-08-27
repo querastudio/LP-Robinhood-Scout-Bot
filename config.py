@@ -49,11 +49,11 @@ DEBUG_API_RAW = os.environ.get("DEBUG_API_RAW", "true").lower() == "true"
 
 # --- Layer 1: Token Signal Quality ---
 MIN_MCAP = _env_float("MIN_MCAP", 100_000)
-MAX_MCAP = _env_float("MAX_MCAP", 2_000_000)
+MAX_MCAP = _env_float("MAX_MCAP", float("inf"))  # no upper cap
 MIN_HOLDERS = _env_int("MIN_HOLDERS", 500)
 MAX_TOP10_PCT = _env_float("MAX_TOP10_PCT", 30)
 MIN_TOKEN_AGE_DAYS = _env_float("MIN_TOKEN_AGE_DAYS", 0)
-MIN_VISITING_COUNT = _env_int("MIN_VISITING_COUNT", 50)
+MIN_VISITING_COUNT = _env_int("MIN_VISITING_COUNT", 10)
 MIN_HOT_SEARCH_RANK = _env_int("MIN_HOT_SEARCH_RANK", 0)  # 0 = disabled, only visiting_count used
 
 # ATH break (signal_type == 7) is a bonus/highlight, not a hard filter by default.
@@ -62,7 +62,7 @@ REQUIRE_ATH_BREAK = os.environ.get("REQUIRE_ATH_BREAK", "false").lower() == "tru
 # --- Layer 2: Fees & Volume ---
 MIN_FEES = _env_float("MIN_FEES", 0.1)  # native token units (ETH)
 MIN_VOL_1H = _env_float("MIN_VOL_1H", 50_000)
-MIN_LIQUIDITY = _env_float("MIN_LIQUIDITY", 20_000)
+MIN_LIQUIDITY = _env_float("MIN_LIQUIDITY", 10_000)
 MIN_PRICE_CHANGE_1H_PCT = _env_float("MIN_PRICE_CHANGE_1H_PCT", 20)
 
 # --- Layer 3: Pool Structure (Uniswap-specific) ---

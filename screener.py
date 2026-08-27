@@ -5,7 +5,7 @@ import time
 from typing import Optional
 
 import config
-from apis import chain_data, gmgn
+from apis import chain_data, gmgn, krystal
 
 SECONDS_PER_DAY = 86_400
 MINUTES_PER_DAY = 1_440
@@ -128,6 +128,18 @@ def _passes_filters(token: dict) -> bool:
     if total_fees is not None and total_fees < config.MIN_FEES:
         return False
 
+    # Pool must be paired with ETH/WETH/USDG (or configured quote symbols),
+    # and its fee tier must be known and >= MIN_BASE_FEE_PCT. Both are hard
+    # rejects when we actually have pool data to check (no_eligible_quote_pair
+    # is only set once pool data was successfully fetched) — an outright API
+    # failure (unknown state) still falls through gracefully, unlike these.
+    if token.get("no_eligible_quote_pair") is True:
+        return False
+
+    fee_tier_pct = token.get("fee_tier_pct")
+    if fee_tier_pct is not None and fee_tier_pct < config.MIN_BASE_FEE_PCT:
+        return False
+
     if config.MIN_FEES_TVL_24H_REQUIRED:
         fees_tvl_pct = token.get("fees_tvl_24h_pct")
         if fees_tvl_pct is None or fees_tvl_pct < config.MIN_FEES_TVL_24H_PCT:
@@ -161,28 +173,13 @@ def _score(token: dict) -> float:
     return score
 
 
-async def _enrich_with_pool_data(dp_client: chain_data.DexPaprikaClient, token: dict) -> None:
-    addr = token.get("address")
-    if not addr:
-        return
-    pools = await dp_client.get_token_pools(addr)
-    if not pools:
-        token.setdefault("dex", None)
-        token.setdefault("pool_tvl", None)
-        token.setdefault("fee_tier_pct", None)
-        token.setdefault("pool_age_days", None)
-        token.setdefault("fees_24h_usd", None)
-        token.setdefault("vol_24h_usd", None)
-        _compute_pool_ratios(token)
-        return
-    normalized = [chain_data.normalize_pool(p) for p in pools]
-    normalized.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
-    best = normalized[0]
+def _apply_best_pool(token: dict, best: dict) -> None:
     token.setdefault("dex", best.get("dex"))
     token.setdefault("pool_tvl", best.get("tvl_usd"))
     token.setdefault("fee_tier_pct", best.get("fee_tier_pct"))
     token.setdefault("fees_24h_usd", best.get("fees_24h_usd"))
     token.setdefault("vol_24h_usd", best.get("volume_24h") or token.get("volume"))
+    token.setdefault("quote_symbol", best.get("quote_symbol"))
     if token.get("liquidity") is None and best.get("tvl_usd") is not None:
         token["liquidity"] = best.get("tvl_usd")
 
@@ -198,6 +195,58 @@ async def _enrich_with_pool_data(dp_client: chain_data.DexPaprikaClient, token: 
     else:
         token.setdefault("pool_age_days", None)
 
+
+def _clear_pool_fields(token: dict) -> None:
+    token.setdefault("dex", None)
+    token.setdefault("pool_tvl", None)
+    token.setdefault("fee_tier_pct", None)
+    token.setdefault("pool_age_days", None)
+    token.setdefault("fees_24h_usd", None)
+    token.setdefault("vol_24h_usd", None)
+    token.setdefault("quote_symbol", None)
+
+
+async def _enrich_with_pool_data(
+    krystal_client: krystal.KrystalClient,
+    dp_client: chain_data.DexPaprikaClient,
+    token: dict,
+) -> None:
+    addr = token.get("address")
+    if not addr:
+        return
+
+    fetched_any_pool = False
+    eligible: list[dict] = []
+
+    krystal_pools = await krystal_client.get_pools_for_token(addr)
+    if krystal_pools:
+        fetched_any_pool = True
+        normalized = [krystal.normalize_krystal_pool(p, addr) for p in krystal_pools]
+        eligible = [
+            p for p in normalized
+            if p.get("quote_symbol") is None
+            or p["quote_symbol"].upper() in config.ALLOWED_QUOTE_SYMBOLS
+        ]
+
+    if not eligible:
+        # Fall back to DexPaprika (no quote-symbol data available there, so
+        # those pools can't be pairing-filtered — treated as unknown pairing).
+        dp_pools = await dp_client.get_token_pools(addr)
+        if dp_pools:
+            fetched_any_pool = True
+            eligible = [chain_data.normalize_pool(p) for p in dp_pools]
+
+    if not eligible:
+        _clear_pool_fields(token)
+        if fetched_any_pool:
+            # We got pool data from Krystal but none matched the allowed
+            # quote symbols (e.g. only paired against some other token).
+            token["no_eligible_quote_pair"] = True
+        _compute_pool_ratios(token)
+        return
+
+    eligible.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
+    _apply_best_pool(token, eligible[0])
     _compute_pool_ratios(token)
 
 
@@ -235,6 +284,7 @@ async def run_screen() -> tuple[list[dict], int]:
     """Returns (passing_tokens_sorted_by_score_desc, total_candidates_scanned)."""
     gmgn_client = gmgn.GmgnClient(config.GMGN_API_KEY)
     dp_client = chain_data.DexPaprikaClient()
+    krystal_client = krystal.KrystalClient(config.KRYSTAL_API_KEY)
     alchemy_client = chain_data.AlchemyClient(config.ALCHEMY_API_KEY) if config.ALCHEMY_API_KEY else None
 
     try:
@@ -245,7 +295,7 @@ async def run_screen() -> tuple[list[dict], int]:
         prefiltered = [t for t in merged.values() if _cheap_prefilter(t)]
         logger.info("%d candidates survived cheap pre-filter", len(prefiltered))
 
-        coros = [_enrich_with_pool_data(dp_client, t) for t in prefiltered]
+        coros = [_enrich_with_pool_data(krystal_client, dp_client, t) for t in prefiltered]
         await _batched(coros, config.BATCH_SIZE)
 
         ownership_coros = [_enrich_with_ownership(alchemy_client, t) for t in prefiltered]
@@ -261,5 +311,6 @@ async def run_screen() -> tuple[list[dict], int]:
     finally:
         await gmgn_client.aclose()
         await dp_client.aclose()
+        await krystal_client.aclose()
         if alchemy_client is not None:
             await alchemy_client.aclose()

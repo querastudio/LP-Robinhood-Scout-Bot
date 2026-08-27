@@ -40,4 +40,5 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           GMGN_API_KEY:       ${{ secrets.GMGN_API_KEY }}
           ALCHEMY_API_KEY:    ${{ secrets.ALCHEMY_API_KEY }}
+          KRYSTAL_API_KEY:    ${{ secrets.KRYSTAL_API_KEY }}
         run: python main.py

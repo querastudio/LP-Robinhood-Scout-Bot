@@ -112,6 +112,7 @@ def build_alert_message(token: dict) -> str:
     symbol = escape(str(token.get("symbol") or "UNKNOWN"))
     name = escape(str(token.get("name") or symbol))
     address = token.get("address") or ""
+    quote_symbol = escape(str(token.get("quote_symbol"))) if token.get("quote_symbol") else "ROBIN"
 
     mcap = token.get("market_cap")
     holders = token.get("holder_count")
@@ -142,7 +143,7 @@ def build_alert_message(token: dict) -> str:
     if ownership_renounced is not None:
         ownership_line = f"{CHECK} Renounced" if ownership_renounced else f"{CROSS} Not renounced"
 
-    fee_tier_ok = fee_tier_pct in config.ALLOWED_FEE_TIERS_PCT if fee_tier_pct is not None else None
+    fee_tier_ok = fee_tier_pct >= config.MIN_BASE_FEE_PCT if fee_tier_pct is not None else None
 
     price = token.get("price")
     vol_1h = token.get("volume_1h")
@@ -156,7 +157,7 @@ def build_alert_message(token: dict) -> str:
     links_str = " | ".join(links) if links else "N/A"
 
     lines = [
-        f"🟢 POOL ALERT — {symbol}/ROBIN",
+        f"🟢 POOL ALERT — {symbol}/{quote_symbol}",
         f"{name} ({symbol})",
         "━━━━━━━━━━━━━━━━━━━━━",
         "💰 MARKET DATA",
@@ -189,6 +190,7 @@ def build_alert_message(token: dict) -> str:
         "💸 FEE STRUCTURE",
         "━━━━━━━━━━━━━━━━━━━━━",
         f"DEX         : {escape(str(token.get('dex'))) if token.get('dex') else 'N/A'}",
+        f"Pair        : {symbol}/{quote_symbol}",
         f"Fee Tier    : {fmt_pct_plain(fee_tier_pct)} {_mark(fee_tier_pct, fee_tier_ok)}",
         f"24h Fees    : {fmt_usd(token.get('fees_24h_usd'))}",
         "━━━━━━━━━━━━━━━━━━━━━",

@@ -63,6 +63,20 @@ MIN_PRICE_CHANGE_1H_PCT = _env_float("MIN_PRICE_CHANGE_1H_PCT", 20)
 ALLOWED_FEE_TIERS_PCT = [0.01, 0.05, 0.3, 1.0]
 MIN_POOL_TVL = _env_float("MIN_POOL_TVL", 10_000)
 
+# --- Layer 4: Pool Health Ratios (Uniswap equivalent of the Meteora
+# Fees/TVL, Vol/TVL panel). Informational by default (shown with ✅/❌ in
+# the alert) — set *_REQUIRED=true to turn either into a hard filter.
+MIN_FEES_TVL_24H_PCT = _env_float("MIN_FEES_TVL_24H_PCT", 0.5)
+MIN_FEES_TVL_24H_REQUIRED = os.environ.get("MIN_FEES_TVL_24H_REQUIRED", "false").lower() == "true"
+MIN_VOL_TVL_24H_PCT = _env_float("MIN_VOL_TVL_24H_PCT", 5)
+MIN_VOL_TVL_24H_REQUIRED = os.environ.get("MIN_VOL_TVL_24H_REQUIRED", "false").lower() == "true"
+
+# Ownership/contract safety check via Alchemy RPC (owner() call). Bonus/
+# highlight by default since not every ERC20 exposes owner()/renounced
+# state the same way — set REQUIRE_OWNERSHIP_RENOUNCED=true to make it a
+# hard filter (tokens with unknown state will then be skipped too).
+REQUIRE_OWNERSHIP_RENOUNCED = os.environ.get("REQUIRE_OWNERSHIP_RENOUNCED", "false").lower() == "true"
+
 # --- Bot behavior ---
 COOLDOWN_HOURS = _env_float("COOLDOWN_HOURS", 6)
 MAX_ALERTS_RUN = _env_int("MAX_ALERTS_RUN", 5)

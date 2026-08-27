@@ -22,9 +22,22 @@ SAMPLE_TOKEN = {
     "price_change_1h": 127.03,
     "hot_search_rank": 200,
     "holder_count": 849,
+    "top_10_holder_rate": 24.3,
     "token_age_days": 1.6,
     "ath_break": True,
     "ath": 0.00033676,
+    "is_honeypot": False,
+    "ownership_renounced": True,
+    "dex": "Uniswap V3",
+    "fee_tier_pct": 0.3,
+    "pool_tvl": 80_200,
+    "pool_age_days": 4,
+    "fees_24h_usd": 9_500,
+    "vol_24h_usd": 171_600,
+    "fees_tvl_24h_pct": 11.9,
+    "vol_tvl_24h_pct": 214.0,
+    "avg_fees_per_min": 6.6,
+    "avg_vol_per_min": 119.2,
 }
 
 

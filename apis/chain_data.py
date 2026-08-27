@@ -53,6 +53,12 @@ def normalize_pool(pool: dict) -> dict:
         "fee_tier_pct": pool.get("fee") or pool.get("fee_tier"),
         "tvl_usd": pool.get("tvl_usd") or pool.get("liquidity_usd") or pool.get("tvl"),
         "volume_24h": pool.get("volume_usd") or pool.get("volume_24h"),
+        # Speculative field names, not yet verified against a live response —
+        # fees_24h in particular may not be exposed directly by DexPaprika and
+        # could require summing swap events instead. Falls back to None/"N/A"
+        # gracefully if absent, same as every other unverified field here.
+        "fees_24h_usd": pool.get("fee_usd_24h") or pool.get("fees_24h") or pool.get("fees_usd"),
+        "created_at": pool.get("created_at") or pool.get("created_at_block_time"),
         "_raw": pool,
     }
 
@@ -94,6 +100,41 @@ class AlchemyClient:
             logger.info("Alchemy eth_getCode returned invalid JSON for %s: %s", address, e)
             return None
         return data.get("result")
+
+    async def get_owner_renounced(self, contract_address: str) -> Optional[bool]:
+        """Call the ERC20 `owner()` getter (selector 0x8da5cb5b) and check
+        whether it returns the zero address (ownership renounced). Returns
+        None if the RPC call fails or the contract doesn't expose owner()
+        (most standard ERC20s without Ownable don't) — treated as unknown,
+        not as "not renounced"."""
+        if not self.rpc_url:
+            return None
+        try:
+            resp = await self._client.post(
+                self.rpc_url,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "eth_call",
+                    "params": [{"to": contract_address, "data": "0x8da5cb5b"}, "latest"],
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except httpx.HTTPError as e:
+            logger.info("Alchemy owner() call failed for %s: %s", contract_address, e)
+            return None
+        except ValueError as e:
+            logger.info("Alchemy owner() call returned invalid JSON for %s: %s", contract_address, e)
+            return None
+        result = data.get("result")
+        if not result or data.get("error"):
+            return None
+        try:
+            owner_addr = "0x" + result[-40:]
+        except (TypeError, IndexError):
+            return None
+        return owner_addr.lower() == "0x0000000000000000000000000000000000000000"
 
 
 class DexScreenerClient:

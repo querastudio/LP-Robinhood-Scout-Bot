@@ -7,6 +7,9 @@ from typing import Optional
 import config
 from apis import chain_data, gmgn
 
+SECONDS_PER_DAY = 86_400
+MINUTES_PER_DAY = 1_440
+
 logger = logging.getLogger("screener")
 
 
@@ -125,6 +128,20 @@ def _passes_filters(token: dict) -> bool:
     if total_fees is not None and total_fees < config.MIN_FEES:
         return False
 
+    if config.MIN_FEES_TVL_24H_REQUIRED:
+        fees_tvl_pct = token.get("fees_tvl_24h_pct")
+        if fees_tvl_pct is None or fees_tvl_pct < config.MIN_FEES_TVL_24H_PCT:
+            return False
+
+    if config.MIN_VOL_TVL_24H_REQUIRED:
+        vol_tvl_pct = token.get("vol_tvl_24h_pct")
+        if vol_tvl_pct is None or vol_tvl_pct < config.MIN_VOL_TVL_24H_PCT:
+            return False
+
+    if config.REQUIRE_OWNERSHIP_RENOUNCED:
+        if token.get("ownership_renounced") is not True:
+            return False
+
     return True
 
 
@@ -153,7 +170,10 @@ async def _enrich_with_pool_data(dp_client: chain_data.DexPaprikaClient, token: 
         token.setdefault("dex", None)
         token.setdefault("pool_tvl", None)
         token.setdefault("fee_tier_pct", None)
-        token.setdefault("total_fees", token.get("total_fees"))
+        token.setdefault("pool_age_days", None)
+        token.setdefault("fees_24h_usd", None)
+        token.setdefault("vol_24h_usd", None)
+        _compute_pool_ratios(token)
         return
     normalized = [chain_data.normalize_pool(p) for p in pools]
     normalized.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
@@ -161,8 +181,48 @@ async def _enrich_with_pool_data(dp_client: chain_data.DexPaprikaClient, token: 
     token.setdefault("dex", best.get("dex"))
     token.setdefault("pool_tvl", best.get("tvl_usd"))
     token.setdefault("fee_tier_pct", best.get("fee_tier_pct"))
+    token.setdefault("fees_24h_usd", best.get("fees_24h_usd"))
+    token.setdefault("vol_24h_usd", best.get("volume_24h") or token.get("volume"))
     if token.get("liquidity") is None and best.get("tvl_usd") is not None:
         token["liquidity"] = best.get("tvl_usd")
+
+    created_at = best.get("created_at")
+    if created_at is not None:
+        try:
+            created_ts = float(created_at)
+            if created_ts > 10**12:  # milliseconds -> seconds
+                created_ts /= 1000
+            token["pool_age_days"] = max(0.0, (time.time() - created_ts) / SECONDS_PER_DAY)
+        except (TypeError, ValueError):
+            token.setdefault("pool_age_days", None)
+    else:
+        token.setdefault("pool_age_days", None)
+
+    _compute_pool_ratios(token)
+
+
+def _compute_pool_ratios(token: dict) -> None:
+    """Uniswap equivalent of the Meteora bot's Fees/TVL, Vol/TVL, Avg
+    Fees/Min, Avg Vol/Min panel. None -> "N/A" downstream, never crashes."""
+    tvl = token.get("pool_tvl") or token.get("liquidity")
+    fees_24h = token.get("fees_24h_usd")
+    vol_24h = token.get("vol_24h_usd")
+
+    token["fees_tvl_24h_pct"] = (fees_24h / tvl * 100) if fees_24h is not None and tvl else None
+    token["vol_tvl_24h_pct"] = (vol_24h / tvl * 100) if vol_24h is not None and tvl else None
+    token["avg_fees_per_min"] = (fees_24h / MINUTES_PER_DAY) if fees_24h is not None else None
+    token["avg_vol_per_min"] = (vol_24h / MINUTES_PER_DAY) if vol_24h is not None else None
+
+
+async def _enrich_with_ownership(alchemy_client: Optional[chain_data.AlchemyClient], token: dict) -> None:
+    if alchemy_client is None or not alchemy_client.rpc_url:
+        token.setdefault("ownership_renounced", None)
+        return
+    addr = token.get("address")
+    if not addr:
+        token.setdefault("ownership_renounced", None)
+        return
+    token["ownership_renounced"] = await alchemy_client.get_owner_renounced(addr)
 
 
 async def _batched(coros, batch_size: int):
@@ -175,6 +235,7 @@ async def run_screen() -> tuple[list[dict], int]:
     """Returns (passing_tokens_sorted_by_score_desc, total_candidates_scanned)."""
     gmgn_client = gmgn.GmgnClient(config.GMGN_API_KEY)
     dp_client = chain_data.DexPaprikaClient()
+    alchemy_client = chain_data.AlchemyClient(config.ALCHEMY_API_KEY) if config.ALCHEMY_API_KEY else None
 
     try:
         merged = await _gather_gmgn_candidates(gmgn_client)
@@ -187,6 +248,9 @@ async def run_screen() -> tuple[list[dict], int]:
         coros = [_enrich_with_pool_data(dp_client, t) for t in prefiltered]
         await _batched(coros, config.BATCH_SIZE)
 
+        ownership_coros = [_enrich_with_ownership(alchemy_client, t) for t in prefiltered]
+        await _batched(ownership_coros, config.BATCH_SIZE)
+
         passing = [t for t in prefiltered if _passes_filters(t)]
         for t in passing:
             t["score"] = _score(t)
@@ -197,3 +261,5 @@ async def run_screen() -> tuple[list[dict], int]:
     finally:
         await gmgn_client.aclose()
         await dp_client.aclose()
+        if alchemy_client is not None:
+            await alchemy_client.aclose()

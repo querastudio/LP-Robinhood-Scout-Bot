@@ -1,5 +1,6 @@
 name: Robinhood Scout Bot
 
+# Touch: force GitHub Actions to (re-)register this workflow file.
 on:
   schedule:
     - cron: '*/5 * * * *'

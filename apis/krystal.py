@@ -46,6 +46,13 @@ class KrystalClient:
             base_url=config.KRYSTAL_BASE_URL, timeout=15.0, headers=headers
         )
         self._owns_client = client is None
+        # Circuit breaker: Krystal Cloud is a paid credit system (2 units
+        # per /v1/pools call) and returns 402 once credit runs out. That
+        # failure mode doesn't change mid-run, so after the first 402 in a
+        # run, skip the remaining ~100+ calls instead of making every one
+        # fail the same way — lets DexPaprika (the fallback) start sooner
+        # and get more of the run's time/rate budget.
+        self._out_of_credit = False
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -53,6 +60,8 @@ class KrystalClient:
 
     async def get_pools_for_token(self, token_address: str) -> list[dict]:
         """List pools containing this token on Robinhood Chain via GET /v1/pools."""
+        if self._out_of_credit:
+            return []
         try:
             resp = await self._client.get(
                 "/v1/pools",
@@ -71,10 +80,17 @@ class KrystalClient:
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPStatusError as e:
-            logger.info(
-                "Krystal /v1/pools lookup failed for %s: HTTP %s - %s",
-                token_address, e.response.status_code, e.response.text[:500],
-            )
+            if e.response.status_code == 402:
+                self._out_of_credit = True
+                logger.warning(
+                    "Krystal out of credit (402) — skipping remaining Krystal "
+                    "lookups for this run, falling back to DexPaprika only."
+                )
+            else:
+                logger.info(
+                    "Krystal /v1/pools lookup failed for %s: HTTP %s - %s",
+                    token_address, e.response.status_code, e.response.text[:500],
+                )
             return []
         except httpx.HTTPError as e:
             logger.info("Krystal /v1/pools lookup failed for %s: %s", token_address, e)

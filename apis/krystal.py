@@ -10,11 +10,15 @@ krystalapp.gitbook.io/cloud-docs pages and pasted them in — not a guess):
   entirely, not a wrong header).
 - Auth header: `KC-APIKey: <key>`.
 - Endpoint: GET /v1/pools (list) — NOT /all/v1/pool/list.
-- chainId query param format is the literal string "ethereum@<id>" for
-  EVERY chain, not just Ethereum mainnet (confirmed by their own examples:
-  ethereum@1, ethereum@8453). Robinhood Chain is chain id 4663 (confirmed
-  via Krystal's own /v1/chains response, which lists "Robinhood" with
-  id 4663 and supportedProtocols uniswapv2/v3/v4) -> "ethereum@4663".
+- chainId query param is a PLAIN int64 (e.g. `4663`) — the docs' own
+  examples show it as the string "ethereum@<id>" (ethereum@1, ethereum@8453)
+  but a live call with that format returned 400: {"error":"...Invalid
+  Integer Value 'ethereum@4663' Type 'int64' Namespace 'chainId'"}. That
+  "ethereum@" prefix format is apparently for a different context (maybe
+  the wallet-facing product) — the actual /v1/pools query param wants the
+  bare numeric id. Robinhood Chain is chain id 4663 (confirmed via
+  Krystal's own /v1/chains response, which lists "Robinhood" with id 4663
+  and supportedProtocols uniswapv2/v3/v4).
 - feeTier in the response is in basis points (3000 = 0.3%, 500 = 0.05%,
   10000 = 1%) -> percent = feeTier / 10000.
 - tvlFrom/volume24hFrom query params default to 1000 (USD) each, which
@@ -53,7 +57,11 @@ class KrystalClient:
             resp = await self._client.get(
                 "/v1/pools",
                 params={
-                    "chainId": f"ethereum@{config.KRYSTAL_CHAIN_ID}",
+                    # The docs' own "ethereum@<id>" example format triggers
+                    # a server-side validation error: {"error":"...Invalid
+                    # Integer Value 'ethereum@4663' Type 'int64' Namespace
+                    # 'chainId'"} — chainId is a plain int64, not that string.
+                    "chainId": config.KRYSTAL_CHAIN_ID,
                     "token": token_address,
                     "tvlFrom": 0,
                     "volume24hFrom": 0,

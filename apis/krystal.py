@@ -62,6 +62,12 @@ class KrystalClient:
             )
             resp.raise_for_status()
             data = resp.json()
+        except httpx.HTTPStatusError as e:
+            logger.info(
+                "Krystal /v1/pools lookup failed for %s: HTTP %s - %s",
+                token_address, e.response.status_code, e.response.text[:500],
+            )
+            return []
         except httpx.HTTPError as e:
             logger.info("Krystal /v1/pools lookup failed for %s: %s", token_address, e)
             return []

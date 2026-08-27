@@ -50,27 +50,38 @@ tahu bentuk *request*-nya dari source code, belum sempat lihat response
 asli). `DEBUG_API_RAW=true` tetap aktif untuk validasi ini di run
 berikutnya.
 
-## Validasi skema API (WAJIB sebelum production)
+## Update: Krystal API sudah tervalidasi penuh
 
-Skema request/response GMGN API (`apis/gmgn.py`), DexPaprika
-(`apis/chain_data.py`), dan **Krystal** (`apis/krystal.py`) di kode ini
-**belum diverifikasi lewat call langsung**. Untuk Krystal, endpoint
-(`GET /all/v1/pool/list`, host `api.krystal.app`) dan parameternya
-(`token`, `chainId`, `limit`) sudah dikonfirmasi dari `doc.json` (OpenAPI
-spec resmi) — tapi skema *response*-nya di dokumen itu salah mapping
-(nunjuk ke tipe generic `SearchOutput`, bukan struktur pool), jadi
-`normalize_krystal_pool()` di `apis/krystal.py` masih tebakan berdasarkan
-struktur pool terdekat yang ada di dokumen (`multichain.LpPool`). Jalankan
-`workflow_dispatch` sekali dan cek Actions log — `DEBUG_API_RAW=true`
-(default) mencetak raw JSON response dari tiap endpoint GMGN dan Krystal.
-Sesuaikan field mapping di `normalize_*` functions kalau ternyata berbeda
-dari asumsi, terutama:
-- nama field `token0`/`token1`/`tokenAmounts` untuk pasangan token
-- unit fee tier (basis points vs persen vs fraksi), atau field fee tier
-  yang benar kalau ternyata bukan `fee`/`feeTier`/`fees[0]`
-- nama field TVL/volume/fees 24h
-- apakah endpoint ini butuh auth header sama sekali (swagger tidak
-  mencantumkan security scheme untuk endpoint ini)
+Sempat 403 terus-menerus meski API key benar — ternyata saya salah
+**produk**, bukan salah header. `api.krystal.app` (dari `doc.json` yang
+saya ambil pertama kali) itu API internal aplikasi wallet Krystal, bukan
+"Krystal Cloud" (produk publik yang dimaksud). Setelah user kirim isi
+dokumentasi resmi `krystalapp.gitbook.io/cloud-docs` langsung:
+- Base URL benar: **`https://cloud-api.krystal.app`**
+- Endpoint: **`GET /v1/pools`** (bukan `/all/v1/pool/list`)
+- Auth: header `KC-APIKey: <key>` (ini sebenarnya sudah benar sebelumnya)
+- `chainId` formatnya string literal **`ethereum@4663`** untuk Robinhood
+  Chain — prefix `ethereum@` dipakai untuk SEMUA chain, bukan cuma
+  Ethereum mainnet (dikonfirmasi dari `/v1/chains` Krystal sendiri, yang
+  juga mengonfirmasi ulang chain id 4663 untuk Robinhood)
+- `feeTier` dalam basis points (3000 = 0.3%, bukan fraksi/persen langsung)
+- `tvlFrom`/`volume24hFrom` default 1000 USD di sisi Krystal — di-override
+  ke 0 di kode supaya threshold TVL/liquidity kita sendiri (`config.py`)
+  yang menentukan, bukan Krystal yang diam-diam nge-filter duluan
+- Response **tidak** punya field timestamp pool creation, jadi `Pool Age`
+  tetap N/A lewat Krystal (DexPaprika masih dicoba sebagai sumber alternatif)
+
+Skema ini sekarang berdasarkan dokumentasi resmi Krystal Cloud (API
+References page), bukan tebakan lagi — `apis/krystal.py` sudah ditulis
+ulang sesuai spesifikasi tersebut.
+
+## Validasi skema API (masih perlu dicek: DexPaprika)
+
+Skema DexPaprika (`apis/chain_data.py`) masih berdasarkan dugaan dan
+sempat kena rate limit (429) di tier gratisnya — belum ada raw response
+sukses yang bisa dicek. Karena Krystal sudah jadi sumber utama data pool
+yang tervalidasi, DexPaprika sekarang cuma fallback sekunder, jadi
+prioritas validasinya lebih rendah.
 
 Semua filter yang datanya tidak tersedia dari API di-skip secara graceful
 (tampil "N/A" di notifikasi), bot tidak akan crash atau menolak semua token

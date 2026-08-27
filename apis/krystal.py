@@ -1,31 +1,27 @@
-"""Krystal API client — pool-level data (fee tier, TVL, price, token pair)
-for a given token address, used to filter pools by quote-asset pairing and
-minimum fee tier.
+"""Krystal Cloud API client — pool-level data (fee tier, TVL, 24h/1h/7d/30d
+stats, token pair) for a given token address.
 
-IMPORTANT — schema status:
-- Endpoint confirmed from the live doc.json (api-docs.krystal.app/docs/doc.json,
-  fetched by the user since krystal.app domains are unreachable from this
-  dev sandbox): GET /all/v1/pool/list, host api.krystal.app, tag "pool".
-  Params confirmed: token (address), chainId (NUMERIC chain id, not a
-  "robinhood" slug!), limit.
-- The response schema in that swagger doc is mismapped to a generic
-  `SearchOutput` type (tokens/portfolios), not an actual pool shape — this
-  looks like a docs-generation bug on Krystal's side, so the true response
-  shape is NOT verified. normalize_krystal_pool() guesses field names based
-  on the one concrete pool struct in the doc (multichain.LpPool: poolAddress,
-  project, tvl, price, fees[], tickSpacing, tokenAmounts[]) plus common
-  Uniswap-pool field-naming conventions. DEBUG_API_RAW logs the raw JSON on
-  the first live run — field mappings MUST be corrected against that log.
-- Auth header confirmed as `KC-APIKey: <key>` (from Krystal's own
-  announcement of Krystal Cloud-MCP + api key signup flow at
-  cloud.krystal.app) — the first live run got a 403 using the earlier
-  guessed `x-api-key` header, which is now fixed. Requires a Krystal Cloud
-  API key (sign up at https://cloud.krystal.app, no CLI keygen flow like
-  GMGN's — it's a plain dashboard signup).
-- config.KRYSTAL_CHAIN_ID (Robinhood Chain's numeric EVM chain id) is NOT
-  known and has no safe default. Until it's set, get_pools_for_token()
-  returns [] and logs a warning — screener.py's fallback to DexPaprika
-  still applies, same graceful-degradation rule as everywhere else.
+Confirmed directly from Krystal Cloud's own docs (user fetched
+krystalapp.gitbook.io/cloud-docs pages and pasted them in — not a guess):
+
+- Base endpoint: https://cloud-api.krystal.app (a DIFFERENT product/domain
+  from api.krystal.app, which is Krystal's internal wallet-app API and
+  kept returning 403 regardless of API key/header — wrong service
+  entirely, not a wrong header).
+- Auth header: `KC-APIKey: <key>`.
+- Endpoint: GET /v1/pools (list) — NOT /all/v1/pool/list.
+- chainId query param format is the literal string "ethereum@<id>" for
+  EVERY chain, not just Ethereum mainnet (confirmed by their own examples:
+  ethereum@1, ethereum@8453). Robinhood Chain is chain id 4663 (confirmed
+  via Krystal's own /v1/chains response, which lists "Robinhood" with
+  id 4663 and supportedProtocols uniswapv2/v3/v4) -> "ethereum@4663".
+- feeTier in the response is in basis points (3000 = 0.3%, 500 = 0.05%,
+  10000 = 1%) -> percent = feeTier / 10000.
+- tvlFrom/volume24hFrom query params default to 1000 (USD) each, which
+  would silently hide small/new pools — we override both to 0 so our own
+  config.MIN_POOL_TVL / MIN_LIQUIDITY filters decide, not Krystal's.
+- Response has no pool-creation-timestamp field at all, so pool_age_days
+  stays N/A via this source (DexPaprika's created_at is still tried too).
 """
 import json
 import logging
@@ -41,88 +37,57 @@ logger = logging.getLogger("krystal")
 class KrystalClient:
     def __init__(self, api_key: str = "", client: Optional[httpx.AsyncClient] = None):
         self.api_key = api_key
-        # Confirmed auth header name "KC-APIKey" (Krystal Cloud API docs /
-        # announcement) — the earlier "x-api-key" guess was wrong, which is
-        # why the first live call got a 403.
         headers = {"KC-APIKey": api_key} if api_key else {}
         self._client = client or httpx.AsyncClient(
             base_url=config.KRYSTAL_BASE_URL, timeout=15.0, headers=headers
         )
         self._owns_client = client is None
-        self._warned_no_chain_id = False
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
 
     async def get_pools_for_token(self, token_address: str) -> list[dict]:
-        """List pools for this token on Robinhood Chain via GET /all/v1/pool/list."""
-        if not config.KRYSTAL_CHAIN_ID:
-            if not self._warned_no_chain_id:
-                logger.warning(
-                    "KRYSTAL_CHAIN_ID not set — skipping Krystal pool lookups "
-                    "(Robinhood Chain's numeric chain id is unknown; falling "
-                    "back to DexPaprika for pool data)."
-                )
-                self._warned_no_chain_id = True
-            return []
+        """List pools containing this token on Robinhood Chain via GET /v1/pools."""
         try:
             resp = await self._client.get(
-                "/all/v1/pool/list",
-                params={"token": token_address, "chainId": config.KRYSTAL_CHAIN_ID, "limit": 20},
+                "/v1/pools",
+                params={
+                    "chainId": f"ethereum@{config.KRYSTAL_CHAIN_ID}",
+                    "token": token_address,
+                    "tvlFrom": 0,
+                    "volume24hFrom": 0,
+                    "limit": 20,
+                },
             )
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPError as e:
-            logger.info("Krystal pool/list lookup failed for %s: %s", token_address, e)
+            logger.info("Krystal /v1/pools lookup failed for %s: %s", token_address, e)
             return []
         except ValueError as e:
-            logger.info("Krystal pool/list lookup returned invalid JSON for %s: %s", token_address, e)
+            logger.info("Krystal /v1/pools lookup returned invalid JSON for %s: %s", token_address, e)
             return []
 
         if config.DEBUG_API_RAW:
             text = json.dumps(data, ensure_ascii=False)
             if len(text) > 3000:
                 text = text[:3000] + f"... [truncated, {len(text)} chars total]"
-            logger.info("RAW Krystal /all/v1/pool/list response for %s: %s", token_address, text)
+            logger.info("RAW Krystal /v1/pools response for %s: %s", token_address, text)
 
-        # Response shape is unverified (see module docstring) — try the
-        # plausible container keys before giving up.
-        if isinstance(data, dict):
-            items = (
-                data.get("pools")
-                or data.get("data")
-                or (data.get("data") or {}).get("pools") if isinstance(data.get("data"), dict) else None
-            )
-            if items is None:
-                items = data.get("result")
-        else:
-            items = data
-        return items or []
+        return data if isinstance(data, list) else []
 
 
-def _extract_pair_from_token_amounts(pool: dict, token_address: str) -> tuple[dict, dict]:
-    """multichain.LpPool-style shape: tokenAmounts is a list of 2 entries,
-    each {token: {address, symbol, ...}, balance, quotes}."""
-    amounts = pool.get("tokenAmounts") or []
-    token_address_lower = (token_address or "").lower()
-    base_tok, quote_tok = {}, {}
-    for entry in amounts:
-        tok = (entry or {}).get("token") or {}
-        addr = tok.get("address")
-        # address may be a plain string or an {chainType,value} object per
-        # addressutil.Address in the doc — handle the plain-string case,
-        # anything else is left as None (graceful).
-        addr_str = addr if isinstance(addr, str) else None
-        if addr_str and addr_str.lower() == token_address_lower:
-            base_tok = tok
-        else:
-            quote_tok = tok
-    return base_tok, quote_tok
+def _to_float(value) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def normalize_krystal_pool(pool: dict, token_address: str) -> dict:
-    """Best-effort normalization — see module docstring on schema status."""
     token0 = pool.get("token0") or {}
     token1 = pool.get("token1") or {}
     token_address_lower = (token_address or "").lower()
@@ -131,42 +96,25 @@ def normalize_krystal_pool(pool: dict, token_address: str) -> dict:
         base, quote = token0, token1
     elif str(token1.get("address", "")).lower() == token_address_lower:
         base, quote = token1, token0
-    elif pool.get("tokenAmounts"):
-        base, quote = _extract_pair_from_token_amounts(pool, token_address)
     else:
         base, quote = token0, token1
 
-    fee = pool.get("feeTier") or pool.get("fee") or pool.get("baseFee")
-    if fee is None:
-        fees_list = pool.get("fees")
-        if isinstance(fees_list, list) and fees_list:
-            fee = fees_list[0]
-    fee_pct = None
-    if fee is not None:
-        try:
-            fee_val = float(fee)
-            # Uniswap fee tiers are commonly encoded in bps (e.g. 3000 = 0.3%)
-            # or fractional (0.003 = 0.3%) depending on the API — normalize
-            # to a plain percent, verify against the raw log.
-            if fee_val > 100:
-                fee_pct = fee_val / 10_000
-            elif fee_val < 1:
-                fee_pct = fee_val * 100
-            else:
-                fee_pct = fee_val
-        except (TypeError, ValueError):
-            fee_pct = None
+    fee_tier_bps = pool.get("feeTier")
+    fee_tier_pct = (fee_tier_bps / 10_000) if isinstance(fee_tier_bps, (int, float)) else None
+
+    stats24h = pool.get("stats24h") or {}
+    protocol = pool.get("protocol") or {}
 
     return {
-        "pool_address": pool.get("poolAddress") or pool.get("address") or pool.get("id"),
-        "dex": pool.get("project") or pool.get("protocol") or pool.get("dex") or pool.get("exchange"),
-        "fee_tier_pct": fee_pct,
-        "tvl_usd": pool.get("tvl") or pool.get("tvlUsd"),
-        "volume_24h": pool.get("volume24h") or pool.get("volumeUsd24h"),
-        "fees_24h_usd": pool.get("fees24h") or pool.get("feesUsd24h"),
-        "apr_24h_pct": pool.get("apr24h") or pool.get("apr"),
+        "pool_address": pool.get("poolAddress"),
+        "dex": protocol.get("name"),
+        "fee_tier_pct": fee_tier_pct,
+        "tvl_usd": _to_float(pool.get("tvl")),
+        "volume_24h": _to_float(stats24h.get("volume")),
+        "fees_24h_usd": _to_float(stats24h.get("fee")),
+        "apr_24h_pct": _to_float(stats24h.get("apr")),
         "base_symbol": base.get("symbol"),
         "quote_symbol": quote.get("symbol"),
-        "created_at": pool.get("createdAt") or pool.get("createdTimestamp"),
+        "created_at": None,  # not exposed by this endpoint
         "_raw": pool,
     }

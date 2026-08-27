@@ -27,6 +27,29 @@ GitHub Actions sering di-drop untuk interval sesering 5 menit — setelah bot
 tervalidasi, setup cron eksternal (mis. cron-job.org) yang memanggil
 `workflow_dispatch` API sebagai pemicu utama yang reliable.
 
+## Update: bug base URL GMGN sudah diperbaiki
+
+Run scan pertama gagal total — `api.gmgn.ai` (domain yang saya tebak awal)
+**tidak resolve DNS sama sekali**. Setelah baca source code `gmgn-cli`
+(npm package resmi GMGN, `GMGNAI/gmgn-skills`) langsung, ketemu domain
+yang benar dan detail request yang sebelumnya salah tebak:
+- Base URL: **`https://openapi.gmgn.ai`** (bukan `api.gmgn.ai`)
+- Auth: header **`X-APIKEY: <key>`** + query `timestamp` (unix seconds) +
+  `client_id` (random UUID) — **bukan** `Authorization: Bearer`
+- `hot_searches`: body `{"params": [{"label": "hot-search", "chain": ...,
+  "interval": "24h", "limit": ...}]}` — array per-chain config, bukan
+  `{"chain": ...}` polos
+- `token_signal`: body `{"chain": ..., "groups": [{"signal_type": [7]}]}`
+  — signal_type array di dalam `groups`, bukan integer polos
+- `rank` butuh query `interval` (mis. `"1h"`) — sebelumnya tidak dikirim
+- GMGN API **reject traffic via IPv6** dengan 401/403 — client sekarang
+  paksa pakai IPv4
+
+Yang masih **belum** terverifikasi: nama field di **response** JSON (baru
+tahu bentuk *request*-nya dari source code, belum sempat lihat response
+asli). `DEBUG_API_RAW=true` tetap aktif untuk validasi ini di run
+berikutnya.
+
 ## Validasi skema API (WAJIB sebelum production)
 
 Skema request/response GMGN API (`apis/gmgn.py`), DexPaprika

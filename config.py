@@ -35,7 +35,7 @@ ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY", "")
 KRYSTAL_API_KEY = os.environ.get("KRYSTAL_API_KEY", "")  # optional, Liquidity Lens
 
 # --- Chain / API endpoints ---
-GMGN_BASE_URL = os.environ.get("GMGN_BASE_URL", "https://api.gmgn.ai")
+GMGN_BASE_URL = os.environ.get("GMGN_BASE_URL", "https://openapi.gmgn.ai")
 GMGN_CHAIN = os.environ.get("GMGN_CHAIN", "robinhood")
 DEXPAPRIKA_BASE_URL = os.environ.get("DEXPAPRIKA_BASE_URL", "https://api.dexpaprika.com")
 DEXPAPRIKA_NETWORK = os.environ.get("DEXPAPRIKA_NETWORK", "robinhood")

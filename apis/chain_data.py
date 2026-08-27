@@ -15,6 +15,7 @@ from typing import Optional
 import httpx
 
 import config
+from apis.gmgn import RateLimiter
 
 logger = logging.getLogger("chain_data")
 
@@ -23,6 +24,10 @@ class DexPaprikaClient:
     def __init__(self, client: Optional[httpx.AsyncClient] = None):
         self._client = client or httpx.AsyncClient(base_url=config.DEXPAPRIKA_BASE_URL, timeout=15.0)
         self._owns_client = client is None
+        # Free-tier DexPaprika started returning 429s once the scanned-token
+        # count grew (227 tokens after the GMGN parsing fixes) — throttle to
+        # stay under whatever their limit is.
+        self._limiter = RateLimiter(config.DEXPAPRIKA_MAX_REQ_PER_SEC)
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -30,6 +35,7 @@ class DexPaprikaClient:
 
     async def get_token_pools(self, token_address: str) -> list[dict]:
         """List pools for a token on the Robinhood network."""
+        await self._limiter.acquire()
         try:
             resp = await self._client.get(
                 f"/networks/{config.DEXPAPRIKA_NETWORK}/tokens/{token_address}/pools"

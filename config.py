@@ -120,5 +120,8 @@ COOLDOWN_CACHE_PATH = os.environ.get("COOLDOWN_CACHE_PATH", "cooldown_cache.json
 
 # GMGN rate limit: leaky bucket 20 req/s. Keep comfortably under.
 GMGN_MAX_REQ_PER_SEC = _env_int("GMGN_MAX_REQ_PER_SEC", 10)
+# DexPaprika free tier started 429-ing once scanned-token volume grew after
+# the GMGN rank-endpoint fix (41 -> 227 candidates/run). Conservative default.
+DEXPAPRIKA_MAX_REQ_PER_SEC = _env_int("DEXPAPRIKA_MAX_REQ_PER_SEC", 2)
 
 WIB_UTC_OFFSET_HOURS = 7

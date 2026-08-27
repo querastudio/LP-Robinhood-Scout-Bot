@@ -40,8 +40,12 @@ GMGN_CHAIN = os.environ.get("GMGN_CHAIN", "robinhood")
 DEXPAPRIKA_BASE_URL = os.environ.get("DEXPAPRIKA_BASE_URL", "https://api.dexpaprika.com")
 DEXPAPRIKA_NETWORK = os.environ.get("DEXPAPRIKA_NETWORK", "robinhood")
 DEXSCREENER_BASE_URL = os.environ.get("DEXSCREENER_BASE_URL", "https://api.dexscreener.com")
-KRYSTAL_BASE_URL = os.environ.get("KRYSTAL_BASE_URL", "https://cloud-api.krystal.app")
-KRYSTAL_CHAIN = os.environ.get("KRYSTAL_CHAIN", "robinhood")
+KRYSTAL_BASE_URL = os.environ.get("KRYSTAL_BASE_URL", "https://api.krystal.app")
+# Robinhood Chain's numeric EVM chain id, required by Krystal's /pool/list
+# endpoint (it takes chainId, not a chain-name slug). Not known/verified —
+# must be set once confirmed. Empty = Krystal pool lookups are skipped
+# gracefully (screener.py falls back to DexPaprika).
+KRYSTAL_CHAIN_ID = os.environ.get("KRYSTAL_CHAIN_ID", "")
 DEBUG_API_RAW = os.environ.get("DEBUG_API_RAW", "true").lower() == "true"
 
 # --- Layer 1: Token Signal Quality ---

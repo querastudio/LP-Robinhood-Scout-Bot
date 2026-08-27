@@ -13,7 +13,8 @@ mengirim notifikasi ke Telegram untuk token yang lolos filter.
    - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — wajib
    - `GMGN_API_KEY` — wajib
    - `ALCHEMY_API_KEY` — opsional
-   - `KRYSTAL_API_KEY` — opsional (Krystal Liquidity Lens API, sumber utama data pool: TVL, fee tier, fees/volume 24h, quote pair). Tanpa key ini bot fallback ke DexPaprika, tapi filter pairing ETH/USDG (`ALLOWED_QUOTE_SYMBOLS`) hanya efektif lewat Krystal karena DexPaprika tidak expose quote-token pair.
+   - `KRYSTAL_API_KEY` — opsional, belum jelas apakah endpoint `/pool/list` benar-benar butuh auth (swagger doc tidak mencantumkan security scheme untuk endpoint ini)
+   - `KRYSTAL_CHAIN_ID` — **wajib diisi untuk filter pool Krystal aktif**. Krystal pakai `chainId` numerik (bukan slug `"robinhood"`) — chain ID EVM Robinhood Chain ini belum diketahui/diverifikasi. Cari di dashboard Alchemy (saat network Robinhood Chain sudah dipilih) atau tanya support Krystal/Robinhood Chain. Tanpa ini, bot skip lookup Krystal secara graceful dan fallback ke DexPaprika — tapi filter pairing ETH/USDG (`ALLOWED_QUOTE_SYMBOLS`) hanya efektif lewat Krystal karena DexPaprika tidak expose quote-token pair.
 3. Jalankan lokal: `python main.py`
 4. Preview format notifikasi tanpa scan sungguhan: `python send_test_alert.py`
 
@@ -29,17 +30,24 @@ tervalidasi, setup cron eksternal (mis. cron-job.org) yang memanggil
 ## Validasi skema API (WAJIB sebelum production)
 
 Skema request/response GMGN API (`apis/gmgn.py`), DexPaprika
-(`apis/chain_data.py`), dan **Krystal Liquidity Lens** (`apis/krystal.py`)
-di kode ini berdasarkan riset dokumentasi, **belum diverifikasi lewat call
-langsung** — untuk Krystal khususnya, domain `krystal.app`/`api-docs.krystal.app`
-tidak bisa diakses dari sandbox dev, jadi field mapping-nya murni tebakan
-dari hasil pencarian web. Jalankan `workflow_dispatch` sekali dan cek
-Actions log — `DEBUG_API_RAW=true` (default) mencetak raw JSON response
-dari tiap endpoint GMGN dan Krystal. Sesuaikan field mapping di
-`normalize_*` functions kalau ternyata berbeda dari asumsi, terutama:
-- nama field `token0`/`token1` vs field lain untuk pasangan token
-- unit fee tier (basis points vs persen vs fraksi)
+(`apis/chain_data.py`), dan **Krystal** (`apis/krystal.py`) di kode ini
+**belum diverifikasi lewat call langsung**. Untuk Krystal, endpoint
+(`GET /all/v1/pool/list`, host `api.krystal.app`) dan parameternya
+(`token`, `chainId`, `limit`) sudah dikonfirmasi dari `doc.json` (OpenAPI
+spec resmi) — tapi skema *response*-nya di dokumen itu salah mapping
+(nunjuk ke tipe generic `SearchOutput`, bukan struktur pool), jadi
+`normalize_krystal_pool()` di `apis/krystal.py` masih tebakan berdasarkan
+struktur pool terdekat yang ada di dokumen (`multichain.LpPool`). Jalankan
+`workflow_dispatch` sekali dan cek Actions log — `DEBUG_API_RAW=true`
+(default) mencetak raw JSON response dari tiap endpoint GMGN dan Krystal.
+Sesuaikan field mapping di `normalize_*` functions kalau ternyata berbeda
+dari asumsi, terutama:
+- nama field `token0`/`token1`/`tokenAmounts` untuk pasangan token
+- unit fee tier (basis points vs persen vs fraksi), atau field fee tier
+  yang benar kalau ternyata bukan `fee`/`feeTier`/`fees[0]`
 - nama field TVL/volume/fees 24h
+- apakah endpoint ini butuh auth header sama sekali (swagger tidak
+  mencantumkan security scheme untuk endpoint ini)
 
 Semua filter yang datanya tidak tersedia dari API di-skip secara graceful
 (tampil "N/A" di notifikasi), bot tidak akan crash atau menolak semua token

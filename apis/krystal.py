@@ -16,6 +16,12 @@ IMPORTANT — schema status:
   project, tvl, price, fees[], tickSpacing, tokenAmounts[]) plus common
   Uniswap-pool field-naming conventions. DEBUG_API_RAW logs the raw JSON on
   the first live run — field mappings MUST be corrected against that log.
+- Auth header confirmed as `KC-APIKey: <key>` (from Krystal's own
+  announcement of Krystal Cloud-MCP + api key signup flow at
+  cloud.krystal.app) — the first live run got a 403 using the earlier
+  guessed `x-api-key` header, which is now fixed. Requires a Krystal Cloud
+  API key (sign up at https://cloud.krystal.app, no CLI keygen flow like
+  GMGN's — it's a plain dashboard signup).
 - config.KRYSTAL_CHAIN_ID (Robinhood Chain's numeric EVM chain id) is NOT
   known and has no safe default. Until it's set, get_pools_for_token()
   returns [] and logs a warning — screener.py's fallback to DexPaprika
@@ -35,7 +41,10 @@ logger = logging.getLogger("krystal")
 class KrystalClient:
     def __init__(self, api_key: str = "", client: Optional[httpx.AsyncClient] = None):
         self.api_key = api_key
-        headers = {"x-api-key": api_key} if api_key else {}
+        # Confirmed auth header name "KC-APIKey" (Krystal Cloud API docs /
+        # announcement) — the earlier "x-api-key" guess was wrong, which is
+        # why the first live call got a 403.
+        headers = {"KC-APIKey": api_key} if api_key else {}
         self._client = client or httpx.AsyncClient(
             base_url=config.KRYSTAL_BASE_URL, timeout=15.0, headers=headers
         )

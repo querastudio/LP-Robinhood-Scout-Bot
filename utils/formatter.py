@@ -112,7 +112,11 @@ def build_alert_message(token: dict) -> str:
     symbol = escape(str(token.get("symbol") or "UNKNOWN"))
     name = escape(str(token.get("name") or symbol))
     address = token.get("address") or ""
-    quote_symbol = escape(str(token.get("quote_symbol"))) if token.get("quote_symbol") else "ROBIN"
+    # No more "ROBIN" placeholder here — that was a display fallback that
+    # got mistaken for real pairing data. quote_symbol is now only ever a
+    # confirmed value (the pairing filter rejects tokens before they reach
+    # this point otherwise), but keep a plain "N/A" fallback just in case.
+    quote_symbol = escape(str(token.get("quote_symbol"))) if token.get("quote_symbol") else "N/A"
 
     mcap = token.get("market_cap")
     holders = token.get("holder_count")

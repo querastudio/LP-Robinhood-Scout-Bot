@@ -211,61 +211,59 @@ async def _enrich_with_pool_data(
     dp_client: chain_data.DexPaprikaClient,
     token: dict,
 ) -> None:
+    """Hard gate: a token only passes the ETH/WETH/USDG pairing requirement
+    when we can POSITIVELY CONFIRM a pool paired with an allowed quote
+    asset. Any other outcome — unknown quote symbol, missing data, an API
+    call failing outright — rejects the token (no_eligible_quote_pair =
+    True). This deliberately breaks from this bot's usual graceful-N/A
+    default: the user asked for this specific filter to fail closed, not
+    open, after a token with an unconfirmed pairing ("Bucket/ROBIN" — the
+    "ROBIN" was just the formatter's unknown-symbol placeholder text, not
+    real pairing data) slipped through and got alerted."""
     addr = token.get("address")
     if not addr:
+        token["no_eligible_quote_pair"] = True
         return
 
-    fetched_any_pool = False
-    eligible: list[dict] = []
+    confirmed: list[dict] = []
 
     krystal_pools = await krystal_client.get_pools_for_token(addr)
     if krystal_pools:
-        fetched_any_pool = True
         normalized = [krystal.normalize_krystal_pool(p, addr) for p in krystal_pools]
-        eligible = [
+        confirmed = [
             p for p in normalized
-            if p.get("quote_symbol") is None
-            or p["quote_symbol"].upper() in config.ALLOWED_QUOTE_SYMBOLS
+            if p.get("quote_symbol") and p["quote_symbol"].upper() in config.ALLOWED_QUOTE_SYMBOLS
         ]
 
-    if not eligible:
-        # Fall back to DexPaprika (no quote-symbol data available there, so
-        # those pools can't be pairing-filtered — treated as unknown pairing).
+    if not confirmed:
+        # GMGN's own quote_address field (e.g. the zero address = native
+        # ETH) can also positively confirm pairing when Krystal has no
+        # eligible pool for this token.
+        quote_address = token.get("quote_address")
+        quote_symbol = config.QUOTE_ADDRESS_SYMBOLS.get(str(quote_address).lower()) if quote_address else None
+        if quote_symbol and quote_symbol.upper() in config.ALLOWED_QUOTE_SYMBOLS:
+            token["quote_symbol"] = quote_symbol
+        else:
+            _clear_pool_fields(token)
+            token["no_eligible_quote_pair"] = True
+            _compute_pool_ratios(token)
+            return
+    else:
+        confirmed.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
+        _apply_best_pool(token, confirmed[0])
+
+    # Pairing is confirmed at this point (via Krystal or GMGN). DexPaprika
+    # can't confirm pairing itself (no quote-token field), but is still
+    # useful here purely to fill in TVL/fee metrics if Krystal didn't have
+    # them — it can never be the sole basis for passing the pairing gate.
+    if token.get("pool_tvl") is None:
         dp_pools = await dp_client.get_token_pools(addr)
         if dp_pools:
-            fetched_any_pool = True
-            eligible = [chain_data.normalize_pool(p) for p in dp_pools]
+            normalized_dp = [chain_data.normalize_pool(p) for p in dp_pools]
+            normalized_dp.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
+            _apply_best_pool(token, normalized_dp[0])
 
-    if not eligible:
-        _clear_pool_fields(token)
-        if fetched_any_pool:
-            # We got pool data from Krystal but none matched the allowed
-            # quote symbols (e.g. only paired against some other token).
-            token["no_eligible_quote_pair"] = True
-        else:
-            # Both Krystal and DexPaprika failed outright (e.g. Krystal 403
-            # without an API key, DexPaprika 410) — fall back to GMGN's own
-            # quote_address field (e.g. the zero address = native ETH) so
-            # the pairing filter still has something to check.
-            _apply_gmgn_quote_fallback(token)
-        _compute_pool_ratios(token)
-        return
-
-    eligible.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
-    _apply_best_pool(token, eligible[0])
     _compute_pool_ratios(token)
-
-
-def _apply_gmgn_quote_fallback(token: dict) -> None:
-    quote_address = token.get("quote_address")
-    if not quote_address:
-        return
-    quote_symbol = config.QUOTE_ADDRESS_SYMBOLS.get(str(quote_address).lower())
-    if quote_symbol is None:
-        return
-    token["quote_symbol"] = quote_symbol
-    if quote_symbol.upper() not in config.ALLOWED_QUOTE_SYMBOLS:
-        token["no_eligible_quote_pair"] = True
 
 
 def _compute_pool_ratios(token: dict) -> None:

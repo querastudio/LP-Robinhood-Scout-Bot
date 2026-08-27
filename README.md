@@ -14,7 +14,7 @@ mengirim notifikasi ke Telegram untuk token yang lolos filter.
    - `GMGN_API_KEY` — wajib
    - `ALCHEMY_API_KEY` — opsional
    - `KRYSTAL_API_KEY` — opsional, belum jelas apakah endpoint `/pool/list` benar-benar butuh auth (swagger doc tidak mencantumkan security scheme untuk endpoint ini)
-   - `KRYSTAL_CHAIN_ID` — **wajib diisi untuk filter pool Krystal aktif**. Krystal pakai `chainId` numerik (bukan slug `"robinhood"`) — chain ID EVM Robinhood Chain ini belum diketahui/diverifikasi. Cari di dashboard Alchemy (saat network Robinhood Chain sudah dipilih) atau tanya support Krystal/Robinhood Chain. Tanpa ini, bot skip lookup Krystal secara graceful dan fallback ke DexPaprika — tapi filter pairing ETH/USDG (`ALLOWED_QUOTE_SYMBOLS`) hanya efektif lewat Krystal karena DexPaprika tidak expose quote-token pair.
+   - `KRYSTAL_CHAIN_ID` — opsional, default **4663** (chain ID Robinhood Chain, dikonfirmasi via dashboard Alchemy: network enum `robinhood-mainnet`, native token ETH). Cuma perlu di-override kalau ternyata salah.
 3. Jalankan lokal: `python main.py`
 4. Preview format notifikasi tanpa scan sungguhan: `python send_test_alert.py`
 

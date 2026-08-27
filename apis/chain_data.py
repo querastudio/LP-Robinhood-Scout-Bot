@@ -68,8 +68,8 @@ class AlchemyClient:
 
     def __init__(self, api_key: str, client: Optional[httpx.AsyncClient] = None):
         self.api_key = api_key
-        # Placeholder RPC URL pattern; the correct Robinhood Chain network
-        # slug must be confirmed against Alchemy's docs before relying on this.
+        # Network slug "robinhood-mainnet" confirmed via the Alchemy
+        # dashboard (chain id 4663, native token ETH).
         self.rpc_url = f"https://robinhood-mainnet.g.alchemy.com/v2/{api_key}" if api_key else None
         self._client = client or httpx.AsyncClient(timeout=15.0)
         self._owns_client = client is None

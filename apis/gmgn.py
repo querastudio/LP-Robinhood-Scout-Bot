@@ -247,6 +247,10 @@ def normalize_signal_item(item: dict) -> dict:
         "top_10_holder_rate": detail.get("top_10_holder_rate"),
         "liquidity": detail.get("liquidity"),
         "price": detail.get("price"),
+        # Confirmed real field in the signal detail object (unlike
+        # hot_searches/rank, which only expose a generic un-windowed
+        # "volume" — see normalize_hot_search_item/normalize_rank_item).
+        "volume_1h": detail.get("volume_1h"),
         "is_honeypot": _truthy(detail.get("is_honeypot")),
         "ownership_renounced": _truthy(detail.get("owner_renounced")),
         "token_age_days": _token_age_days(detail.get("created_timestamp") or detail.get("open_timestamp")),

@@ -62,6 +62,13 @@ async def _gather_gmgn_candidates(client: gmgn.GmgnClient) -> dict[str, dict]:
 
     for rec in merged.values():
         rec.setdefault("ath_break", None)
+        # volume_1h is only precisely available from token_signal's detail
+        # object (real "volume_1h" field). hot_searches/rank only expose a
+        # generic, un-windowed "volume" — used here as a best-effort
+        # fallback rather than leaving the field N/A for most tokens
+        # (which never trigger an ATH signal and so never hit signal_raw).
+        if rec.get("volume_1h") is None and rec.get("volume") is not None:
+            rec["volume_1h"] = rec["volume"]
 
     return merged
 

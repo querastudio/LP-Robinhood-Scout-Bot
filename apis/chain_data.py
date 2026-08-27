@@ -4,12 +4,26 @@
 - Alchemy RPC: optional on-chain checks (mint function, renounced ownership).
 - DexScreener: fallback price/volume + link, skipped gracefully if not indexed.
 
-Schemas here are best-effort based on each provider's public docs and are
-NOT guaranteed to match Robinhood Chain coverage exactly. All lookups fail
-soft (return None / [] on error) so a missing data source never crashes
-the bot or blocks unrelated filters.
+DexPaprika schema confirmed from the official Python SDK source
+(github.com/coinpaprika/dexpaprika-sdk-python, read directly — the docs
+site itself is unreachable from this dev sandbox): the endpoint this bot
+originally called, `/networks/{network}/tokens/{address}/pools`, was
+REMOVED (permanent HTTP 410, matching what every live run saw) and
+replaced by `/networks/{network}/pools/search?token_address=...`. Its
+response wraps rows under `results` (cursor-paginated, not `pools`), and
+field names changed too (`liquidity_usd`, `volume_usd_24h`, `dex_name`,
+`fee`, `created_at` as an ISO 8601 string rather than a unix timestamp).
+Note the SDK's own model docstring: `tokens[].name`/`symbol` in this
+endpoint come back as None — DexPaprika cannot confirm quote-token
+pairing, so it's only ever used here to backfill TVL/volume/fee-tier
+numbers for a pairing already confirmed via Krystal or GMGN, never to
+satisfy the ETH/WETH/USDG pairing gate itself.
+
+All lookups fail soft (return None / [] on error) so a missing data
+source never crashes the bot or blocks unrelated filters.
 """
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -34,11 +48,19 @@ class DexPaprikaClient:
             await self._client.aclose()
 
     async def get_token_pools(self, token_address: str) -> list[dict]:
-        """List pools for a token on the Robinhood network."""
+        """List pools for a token on the Robinhood network via the current
+        /pools/search endpoint (the old /tokens/{address}/pools route was
+        removed and returns 410)."""
         await self._limiter.acquire()
         try:
             resp = await self._client.get(
-                f"/networks/{config.DEXPAPRIKA_NETWORK}/tokens/{token_address}/pools"
+                f"/networks/{config.DEXPAPRIKA_NETWORK}/pools/search",
+                params={
+                    "token_address": token_address,
+                    "limit": 20,
+                    "sort": "desc",
+                    "order_by": "liquidity_usd",
+                },
             )
             resp.raise_for_status()
             data = resp.json()
@@ -48,23 +70,53 @@ class DexPaprikaClient:
         except ValueError as e:
             logger.info("DexPaprika pools lookup returned invalid JSON for %s: %s", token_address, e)
             return []
-        items = data.get("pools") if isinstance(data, dict) else data
+        items = data.get("results") if isinstance(data, dict) else data
         return items or []
 
 
+def _parse_iso_timestamp(value) -> Optional[float]:
+    """DexPaprika's created_at is an ISO 8601 string here (unlike the unix
+    timestamps GMGN/Krystal use elsewhere) — returns unix seconds, or None
+    if unparseable."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except ValueError:
+        return None
+
+
 def normalize_pool(pool: dict) -> dict:
+    fee = pool.get("fee")
+    fee_tier_pct = None
+    if isinstance(fee, (int, float)):
+        # Unit is unconfirmed (fraction vs percent vs bps) — apply the same
+        # heuristic used for Krystal's feeTier until a live value pins it down.
+        if fee > 100:
+            fee_tier_pct = fee / 10_000
+        elif fee < 1:
+            fee_tier_pct = fee * 100
+        else:
+            fee_tier_pct = fee
+
+    volume_24h = pool.get("volume_usd_24h")
+    fees_24h_usd = None
+    if fee_tier_pct is not None and volume_24h is not None:
+        # No direct fees-in-USD field in /pools/search — approximate from
+        # the fee tier applied to 24h volume.
+        fees_24h_usd = volume_24h * (fee_tier_pct / 100)
+
     return {
-        "pool_address": pool.get("id") or pool.get("pool_address") or pool.get("address"),
-        "dex": pool.get("dex_id") or pool.get("dex") or pool.get("exchange"),
-        "fee_tier_pct": pool.get("fee") or pool.get("fee_tier"),
-        "tvl_usd": pool.get("tvl_usd") or pool.get("liquidity_usd") or pool.get("tvl"),
-        "volume_24h": pool.get("volume_usd") or pool.get("volume_24h"),
-        # Speculative field names, not yet verified against a live response —
-        # fees_24h in particular may not be exposed directly by DexPaprika and
-        # could require summing swap events instead. Falls back to None/"N/A"
-        # gracefully if absent, same as every other unverified field here.
-        "fees_24h_usd": pool.get("fee_usd_24h") or pool.get("fees_24h") or pool.get("fees_usd"),
-        "created_at": pool.get("created_at") or pool.get("created_at_block_time"),
+        "pool_address": pool.get("id"),
+        "dex": pool.get("dex_name") or pool.get("dex_id"),
+        "fee_tier_pct": fee_tier_pct,
+        "tvl_usd": pool.get("liquidity_usd"),
+        "volume_24h": volume_24h,
+        "fees_24h_usd": fees_24h_usd,
+        "created_at": _parse_iso_timestamp(pool.get("created_at")),
         "_raw": pool,
     }
 

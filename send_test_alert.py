@@ -25,7 +25,7 @@ SAMPLE_TOKEN = {
     "top_10_holder_rate": 24.3,
     "token_age_days": 1.6,
     "ath_break": True,
-    "ath": 0.00033676,
+    "ath_market_cap": 336_760,
     "is_honeypot": False,
     "ownership_renounced": True,
     "dex": "Uniswap V3",

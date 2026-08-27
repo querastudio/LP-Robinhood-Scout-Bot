@@ -49,7 +49,7 @@ async def _gather_gmgn_candidates(client: gmgn.GmgnClient) -> dict[str, dict]:
             continue
         rec = merged.setdefault(addr, {"address": addr})
         rec["ath_break"] = True
-        rec["ath"] = n.get("ath")
+        rec["ath_market_cap"] = n.get("ath_market_cap")
         _merge_token(rec, n)
 
     for item in rank_raw:
@@ -242,12 +242,30 @@ async def _enrich_with_pool_data(
             # We got pool data from Krystal but none matched the allowed
             # quote symbols (e.g. only paired against some other token).
             token["no_eligible_quote_pair"] = True
+        else:
+            # Both Krystal and DexPaprika failed outright (e.g. Krystal 403
+            # without an API key, DexPaprika 410) — fall back to GMGN's own
+            # quote_address field (e.g. the zero address = native ETH) so
+            # the pairing filter still has something to check.
+            _apply_gmgn_quote_fallback(token)
         _compute_pool_ratios(token)
         return
 
     eligible.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
     _apply_best_pool(token, eligible[0])
     _compute_pool_ratios(token)
+
+
+def _apply_gmgn_quote_fallback(token: dict) -> None:
+    quote_address = token.get("quote_address")
+    if not quote_address:
+        return
+    quote_symbol = config.QUOTE_ADDRESS_SYMBOLS.get(str(quote_address).lower())
+    if quote_symbol is None:
+        return
+    token["quote_symbol"] = quote_symbol
+    if quote_symbol.upper() not in config.ALLOWED_QUOTE_SYMBOLS:
+        token["no_eligible_quote_pair"] = True
 
 
 def _compute_pool_ratios(token: dict) -> None:
@@ -264,12 +282,15 @@ def _compute_pool_ratios(token: dict) -> None:
 
 
 async def _enrich_with_ownership(alchemy_client: Optional[chain_data.AlchemyClient], token: dict) -> None:
+    # GMGN already reports ownership-renounced state directly (is_renounced /
+    # owner_renounced) — only fall back to the Alchemy owner() RPC call when
+    # GMGN didn't have an answer.
+    if token.get("ownership_renounced") is not None:
+        return
     if alchemy_client is None or not alchemy_client.rpc_url:
-        token.setdefault("ownership_renounced", None)
         return
     addr = token.get("address")
     if not addr:
-        token.setdefault("ownership_renounced", None)
         return
     token["ownership_renounced"] = await alchemy_client.get_owner_renounced(addr)
 

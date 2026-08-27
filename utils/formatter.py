@@ -129,7 +129,7 @@ def build_alert_message(token: dict) -> str:
 
     ath_break = token.get("ath_break")
     if ath_break is True:
-        ath_line = f"{CHECK} Broke prev daily ATH ({fmt_price(token.get('ath'))})"
+        ath_line = f"{CHECK} Broke prev ATH MCap ({fmt_usd(token.get('ath_market_cap'))})"
     elif ath_break is False:
         ath_line = "—"
     else:

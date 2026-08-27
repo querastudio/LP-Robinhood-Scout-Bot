@@ -1,31 +1,40 @@
 """GMGN OpenAPI client.
 
 Request shape (endpoint paths, auth scheme, body/query format) is grounded
-in the `gmgn-cli` package source (GMGNAI/gmgn-skills, installed and read
-directly — not just its docs), specifically dist/client/OpenApiClient.js,
-dist/client/signer.js and dist/commands/market.js. That fixed several
-wrong assumptions from the original design:
+in the `gmgn-cli` package source (GMGNAI/gmgn-skills), specifically
+dist/client/OpenApiClient.js, dist/client/signer.js and
+dist/commands/market.js:
 
-- Base host is `https://openapi.gmgn.ai`, NOT `api.gmgn.ai` (that domain
-  doesn't even resolve — this was the actual bug in the first live run).
-- Auth is header `X-APIKEY: <key>` plus query params `timestamp` (unix
-  seconds) and `client_id` (random UUID) — NOT `Authorization: Bearer`.
-- `hot_searches` body is `{"params": [{"label": "hot-search", "chain":
-  ..., "interval": "24h", "limit": ...}]}` (a list of per-chain configs),
-  not `{"chain": ...}`.
-- `token_signal` body is `{"chain": ..., "groups": [{"signal_type": [7]}]}`
-  — signal_type is a list nested in a "groups" array, not a bare int.
-- `rank` (GMGN calls it "trending" in the CLI) requires an `interval`
-  query param (e.g. "1h"), which the original design omitted.
+- Base host `https://openapi.gmgn.ai` (NOT `api.gmgn.ai`, which doesn't
+  resolve at all — this broke the first live run completely).
+- Auth: header `X-APIKEY: <key>` + query params `timestamp` (unix seconds)
+  and `client_id` (random UUID) — not `Authorization: Bearer`.
+- `hot_searches` body: `{"params": [{"label": "hot-search", "chain": ...,
+  "interval": "24h", "limit": ...}]}`.
+- `token_signal` body: `{"chain": ..., "groups": [{"signal_type": [7]}]}`.
+- `rank` requires an `interval` query param.
+- GMGN rejects IPv6 traffic with 401/403 — client forces IPv4.
 
-What's still UNVERIFIED: the actual response JSON field names (this repo
-only had gmgn-cli's request-building code available, not a live response
-capture — krystal.app-style domains were reachable enough to resolve DNS
-but actual response bodies were never fetched from this dev environment).
-DEBUG_API_RAW logs the raw response on every real run so normalize_*
-below can be corrected against real data — treat current field-name
-guesses as no more reliable than before for the *response* side, even
-though the *request* side is now grounded in real source.
+Response shape is now grounded in an actual captured raw response
+(DEBUG_API_RAW log from a live GitHub Actions run), which turned up two
+real container-nesting bugs the original guesses had wrong:
+
+- `hot_searches` data is `[{chain, interval, tokens: [...]}]` — ONE entry
+  per requested chain with the token list nested under `tokens`, not a
+  flat list of tokens.
+- `rank` data is double-nested: `{"code":0,"data":{"code":0,"data":
+  {"rank":[...]}}}`.
+- `token_signal` data IS a flat list, but each item's own `symbol`/`name`/
+  `holder_count`/etc. live under a nested `data` object, not at the top
+  level (top level only has id/token_address/signal_type/ath/market_cap/
+  trigger_*).
+- `ath` in a token_signal item is a **market cap in USD**, not a price —
+  formatting it as a price was a bug in the original alert.
+- `is_honeypot`/`is_renounced` in hot_searches/rank are 0/1 ints; the
+  equivalent fields in token_signal's nested `data` are the STRINGS
+  "yes"/"no" (`is_honeypot`, `owner_renounced`) — both normalized to bool
+  by `_truthy()` below.
+- `top_10_holder_rate` is already a 0-1 fraction in both shapes.
 """
 import asyncio
 import json
@@ -59,6 +68,23 @@ def _log_raw(label: str, payload: Any) -> None:
 
 def _auth_query() -> dict:
     return {"timestamp": int(time.time()), "client_id": str(uuid.uuid4())}
+
+
+def _truthy(value: Any) -> Optional[bool]:
+    """Normalize GMGN's mixed 0/1 int and "yes"/"no" string booleans."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("yes", "true", "1"):
+            return True
+        if v in ("no", "false", "0"):
+            return False
+    return None
 
 
 class RateLimiter:
@@ -122,10 +148,14 @@ class GmgnClient:
         data = await self._request("POST", "/v1/market/hot_searches", json_body=body)
         if not data:
             return []
-        items = data.get("data") if isinstance(data, dict) else data
-        if isinstance(items, dict):
-            items = items.get("list") or items.get("hot_searches") or []
-        return items or []
+        chain_results = data.get("data") if isinstance(data, dict) else data
+        if not isinstance(chain_results, list):
+            return []
+        tokens: list[dict] = []
+        for chain_result in chain_results:
+            if isinstance(chain_result, dict):
+                tokens.extend(chain_result.get("tokens") or [])
+        return tokens
 
     async def get_token_signal(self, chain: str = None, signal_type: int = 7) -> list[dict]:
         chain = chain or config.GMGN_CHAIN
@@ -134,19 +164,18 @@ class GmgnClient:
         if not data:
             return []
         items = data.get("data") if isinstance(data, dict) else data
-        if isinstance(items, dict):
-            items = items.get("list") or items.get("signals") or []
-        return items or []
+        return items if isinstance(items, list) else []
 
     async def get_rank(self, chain: str = None, interval: str = "1h") -> list[dict]:
         chain = chain or config.GMGN_CHAIN
         data = await self._request("GET", "/v1/market/rank", params={"chain": chain, "interval": interval})
         if not data:
             return []
-        items = data.get("data") if isinstance(data, dict) else data
-        if isinstance(items, dict):
-            items = items.get("list") or items.get("rank") or []
-        return items or []
+        # Confirmed double-nested: {"code":0,"data":{"code":0,"data":{"rank":[...]}}}
+        outer = data.get("data") if isinstance(data, dict) else None
+        inner = outer.get("data") if isinstance(outer, dict) else outer
+        items = inner.get("rank") if isinstance(inner, dict) else None
+        return items if isinstance(items, list) else []
 
     async def get_token_kline(self, address: str, chain: str = None, resolution: str = "1h") -> list[dict]:
         chain = chain or config.GMGN_CHAIN
@@ -162,39 +191,66 @@ class GmgnClient:
         return items or []
 
 
+def _token_age_days(created_ts: Any) -> Optional[float]:
+    if created_ts is None:
+        return None
+    try:
+        ts = float(created_ts)
+    except (TypeError, ValueError):
+        return None
+    if ts <= 0:
+        return None
+    if ts > 10**12:  # milliseconds -> seconds
+        ts /= 1000
+    return max(0.0, (time.time() - ts) / 86_400)
+
+
 def normalize_hot_search_item(item: dict) -> dict:
-    """Best-effort normalization of a hot_searches entry. Missing fields -> None."""
+    """hot_searches token entry — confirmed field names from a live response."""
+    top10 = item.get("top_10_holder_rate")
     return {
-        "address": item.get("address") or item.get("token_address") or item.get("contract_address"),
-        "symbol": item.get("symbol") or item.get("token_symbol"),
-        "name": item.get("name") or item.get("token_name"),
+        "address": item.get("address") or item.get("token_address"),
+        "symbol": item.get("symbol"),
+        "name": item.get("name"),
         "rank": item.get("rank"),
-        "visiting_count": item.get("visiting_count") or item.get("visit_count"),
-        "market_cap": item.get("market_cap") or item.get("mcap") or item.get("usd_market_cap"),
-        "volume": item.get("volume") or item.get("volume_24h"),
+        "visiting_count": item.get("visiting_count"),
+        "market_cap": item.get("market_cap"),
+        "volume": item.get("volume"),
         "liquidity": item.get("liquidity"),
         "price": item.get("price"),
-        "price_change_1h": item.get("price_change_1h") or item.get("change1h") or item.get("price_change_percent_1h"),
-        "holder_count": item.get("holder_count") or item.get("holders"),
-        "created_at": item.get("created_at") or item.get("open_timestamp") or item.get("created_timestamp"),
+        "price_change_1h": item.get("price_change_percent1h"),
+        "holder_count": item.get("holder_count"),
+        "top_10_holder_rate": top10,
+        "is_honeypot": _truthy(item.get("is_honeypot")),
+        "ownership_renounced": _truthy(item.get("is_renounced")),
+        "token_age_days": _token_age_days(item.get("creation_timestamp") or item.get("open_timestamp")),
+        "quote_address": item.get("launch_quote_address") or item.get("quote_address"),
         "_raw": item,
     }
 
 
 def normalize_signal_item(item: dict) -> dict:
-    cur = item.get("cur_data") or {}
+    """token_signal entry — top level only has id/token_address/signal_type/
+    ath/market_cap/trigger_*; everything else (symbol, name, holder_count,
+    ...) lives under the nested "data" object."""
+    detail = item.get("data") or {}
     return {
-        "address": item.get("address") or item.get("token_address"),
-        "symbol": item.get("symbol"),
-        "name": item.get("name"),
+        "address": item.get("token_address") or detail.get("address"),
+        "symbol": detail.get("symbol"),
+        "name": detail.get("name"),
         "signal_type": item.get("signal_type"),
-        "ath": item.get("ath"),
+        # "ath" here is an ATH MARKET CAP in USD, not a price.
+        "ath_market_cap": item.get("ath"),
         "trigger_mc": item.get("trigger_mc"),
-        "market_cap": item.get("market_cap") or item.get("usd_market_cap") or cur.get("market_cap"),
-        "holder_count": cur.get("holder_count") or item.get("holder_count"),
-        "top_10_holder_rate": cur.get("top_10_holder_rate") or item.get("top_10_holder_rate"),
-        "liquidity": cur.get("liquidity") or item.get("liquidity"),
-        "price": cur.get("price") or item.get("price"),
+        "market_cap": item.get("market_cap") or detail.get("usd_market_cap"),
+        "holder_count": detail.get("holder_count"),
+        "top_10_holder_rate": detail.get("top_10_holder_rate"),
+        "liquidity": detail.get("liquidity"),
+        "price": detail.get("price"),
+        "is_honeypot": _truthy(detail.get("is_honeypot")),
+        "ownership_renounced": _truthy(detail.get("owner_renounced")),
+        "token_age_days": _token_age_days(detail.get("created_timestamp") or detail.get("open_timestamp")),
+        "quote_address": detail.get("quote_address"),
         "_raw": item,
     }
 
@@ -205,12 +261,16 @@ def normalize_rank_item(item: dict) -> dict:
         "symbol": item.get("symbol"),
         "name": item.get("name"),
         "price": item.get("price"),
-        "market_cap": item.get("market_cap") or item.get("usd_market_cap"),
+        "market_cap": item.get("market_cap"),
         "liquidity": item.get("liquidity"),
-        "volume": item.get("volume") or item.get("volume_24h"),
+        "volume": item.get("volume"),
         "holder_count": item.get("holder_count"),
+        "top_10_holder_rate": item.get("top_10_holder_rate"),
         "rug_ratio": item.get("rug_ratio"),
-        "is_honeypot": item.get("is_honeypot"),
-        "price_change_1h": item.get("price_change_1h") or item.get("change1h") or item.get("price_change_percent_1h"),
+        "is_honeypot": _truthy(item.get("is_honeypot")),
+        "ownership_renounced": _truthy(item.get("is_renounced")),
+        "price_change_1h": item.get("price_change_percent1h"),
+        "token_age_days": _token_age_days(item.get("creation_timestamp") or item.get("open_timestamp")),
+        "quote_address": item.get("launch_quote_address") or item.get("quote_address"),
         "_raw": item,
     }

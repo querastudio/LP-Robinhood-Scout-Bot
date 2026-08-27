@@ -84,6 +84,20 @@ ALLOWED_QUOTE_SYMBOLS = [
 # same graceful-N/A rule as every other filter in this bot.
 MIN_BASE_FEE_PCT = _env_float("MIN_BASE_FEE_PCT", 2.0)
 
+# Fallback quote-asset resolution when Krystal/DexPaprika pool lookups fail
+# outright (e.g. Krystal 403 without an API key): map GMGN's quote_address
+# field to a symbol. The zero address is GMGN's sentinel for "paired with
+# the chain's native token" (ETH on Robinhood Chain) — confirmed from a
+# live token_signal response. Add more via env (JSON-less, comma pairs of
+# address=symbol) if other quote token addresses are identified.
+QUOTE_ADDRESS_SYMBOLS = {
+    "0x0000000000000000000000000000000000000000": "ETH",
+}
+for _pair in os.environ.get("QUOTE_ADDRESS_SYMBOLS_EXTRA", "").split(","):
+    if "=" in _pair:
+        _addr, _sym = _pair.split("=", 1)
+        QUOTE_ADDRESS_SYMBOLS[_addr.strip().lower()] = _sym.strip().upper()
+
 # --- Layer 4: Pool Health Ratios (Uniswap equivalent of the Meteora
 # Fees/TVL, Vol/TVL panel). Informational by default (shown with ✅/❌ in
 # the alert) — set *_REQUIRED=true to turn either into a hard filter.

@@ -144,6 +144,10 @@ def build_alert_message(token: dict) -> str:
 
     fee_tier_ok = fee_tier_pct in config.ALLOWED_FEE_TIERS_PCT if fee_tier_pct is not None else None
 
+    price = token.get("price")
+    vol_1h = token.get("volume_1h")
+    liquidity = token.get("liquidity")
+
     links = []
     if address:
         links.append(f'<a href="https://app.uniswap.org/explore/tokens/robinhood/{address}">Uniswap</a>')
@@ -155,10 +159,17 @@ def build_alert_message(token: dict) -> str:
         f"🟢 POOL ALERT — {symbol}/ROBIN",
         f"{name} ({symbol})",
         "━━━━━━━━━━━━━━━━━━━━━",
+        "💰 MARKET DATA",
+        "━━━━━━━━━━━━━━━━━━━━━",
+        f"Market Cap  : {fmt_usd(mcap)} {_mark(mcap, mcap is not None and config.MIN_MCAP <= mcap <= config.MAX_MCAP)}",
+        f"Price       : {fmt_price(price)}",
+        f"Volume (1h) : {fmt_usd(vol_1h)} {_mark(vol_1h, vol_1h is not None and vol_1h >= config.MIN_VOL_1H)}",
+        f"Liquidity   : {fmt_usd(liquidity)}",
+        f"Total Fees  : {fmt_native(token.get('total_fees'))} {_mark(token.get('total_fees'), (token.get('total_fees') or 0) >= config.MIN_FEES if token.get('total_fees') is not None else None)}",
+        "━━━━━━━━━━━━━━━━━━━━━",
         "🪙 TOKEN SAFETY",
         "━━━━━━━━━━━━━━━━━━━━━",
         f"Token       : {symbol}",
-        f"MCap        : {fmt_usd(mcap)} {_mark(mcap, mcap is not None and config.MIN_MCAP <= mcap <= config.MAX_MCAP)}",
         f"Holders     : {fmt_int(holders)} {_mark(holders, holders is not None and holders >= config.MIN_HOLDERS)}",
         f"Top 10 %    : {fmt_pct_plain(top10_pct)} {_mark(top10_pct, top10_pct is not None and top10_pct <= config.MAX_TOP10_PCT)}",
         f"Ownership   : {ownership_line}",
@@ -180,7 +191,6 @@ def build_alert_message(token: dict) -> str:
         f"DEX         : {escape(str(token.get('dex'))) if token.get('dex') else 'N/A'}",
         f"Fee Tier    : {fmt_pct_plain(fee_tier_pct)} {_mark(fee_tier_pct, fee_tier_ok)}",
         f"24h Fees    : {fmt_usd(token.get('fees_24h_usd'))}",
-        f"Total Fees  : {fmt_native(token.get('total_fees'))} {_mark(token.get('total_fees'), (token.get('total_fees') or 0) >= config.MIN_FEES if token.get('total_fees') is not None else None)}",
         "━━━━━━━━━━━━━━━━━━━━━",
         "🔗 LINKS",
         "━━━━━━━━━━━━━━━━━━━━━",

@@ -102,8 +102,13 @@ def _to_float(value) -> Optional[float]:
 
 
 def normalize_krystal_pool(pool: dict, token_address: str) -> dict:
-    token0 = pool.get("token0") or {}
-    token1 = pool.get("token1") or {}
+    # Live response wraps each side as {"token": {...}, "balance": "..."},
+    # not the flat Token object the docs' example page showed — unwrap it,
+    # falling back to the flat shape in case some pools/protocols differ.
+    token0_wrap = pool.get("token0") or {}
+    token1_wrap = pool.get("token1") or {}
+    token0 = token0_wrap.get("token") if isinstance(token0_wrap.get("token"), dict) else token0_wrap
+    token1 = token1_wrap.get("token") if isinstance(token1_wrap.get("token"), dict) else token1_wrap
     token_address_lower = (token_address or "").lower()
 
     if str(token0.get("address", "")).lower() == token_address_lower:

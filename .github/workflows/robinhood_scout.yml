@@ -1,0 +1,42 @@
+name: Robinhood Scout Bot
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      send_test_alert:
+        description: "Kirim contoh notifikasi (preview format) tanpa scan sungguhan"
+        type: boolean
+        default: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install -r requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: cooldown_cache.json
+          key: cooldown-${{ github.run_id }}
+          restore-keys: cooldown-
+      - name: Send test alert (manual preview only)
+        if: github.event_name == 'workflow_dispatch' && inputs.send_test_alert == true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python send_test_alert.py
+      - name: Run bot
+        if: github.event_name != 'workflow_dispatch' || inputs.send_test_alert != true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          GMGN_API_KEY:       ${{ secrets.GMGN_API_KEY }}
+          ALCHEMY_API_KEY:    ${{ secrets.ALCHEMY_API_KEY }}
+        run: python main.py

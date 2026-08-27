@@ -1,5 +1,7 @@
 # Robinhood Scout Bot
 
+Status: secrets sudah dikonfigurasi (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GMGN_API_KEY`, `ALCHEMY_API_KEY`).
+
 Telegram bot yang memindai token/pool di Robinhood Chain (Arbitrum Orbit L2)
 lewat GMGN API + data pool on-chain (DexPaprika/Alchemy/DexScreener), dan
 mengirim notifikasi ke Telegram untuk token yang lolos filter.

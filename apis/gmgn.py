@@ -225,6 +225,11 @@ def normalize_hot_search_item(item: dict) -> dict:
         "ownership_renounced": _truthy(item.get("is_renounced")),
         "token_age_days": _token_age_days(item.get("creation_timestamp") or item.get("open_timestamp")),
         "quote_address": item.get("launch_quote_address") or item.get("quote_address"),
+        # Wash-trading / rug flags — GMGN reports these directly, used as an
+        # "organic volume" signal so a high raw volume number backed by
+        # wash trading doesn't pass the filter just because it's large.
+        "is_wash_trading": _truthy(item.get("is_wash_trading")),
+        "rug_ratio": item.get("rug_ratio"),
         "_raw": item,
     }
 
@@ -255,6 +260,8 @@ def normalize_signal_item(item: dict) -> dict:
         "ownership_renounced": _truthy(detail.get("owner_renounced")),
         "token_age_days": _token_age_days(detail.get("created_timestamp") or detail.get("open_timestamp")),
         "quote_address": detail.get("quote_address"),
+        "is_wash_trading": _truthy(detail.get("is_wash_trading")),
+        "rug_ratio": detail.get("rug_ratio"),
         "_raw": item,
     }
 
@@ -271,6 +278,7 @@ def normalize_rank_item(item: dict) -> dict:
         "holder_count": item.get("holder_count"),
         "top_10_holder_rate": item.get("top_10_holder_rate"),
         "rug_ratio": item.get("rug_ratio"),
+        "is_wash_trading": _truthy(item.get("is_wash_trading")),
         "is_honeypot": _truthy(item.get("is_honeypot")),
         "ownership_renounced": _truthy(item.get("is_renounced")),
         "price_change_1h": item.get("price_change_percent1h"),

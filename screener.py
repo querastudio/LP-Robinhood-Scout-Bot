@@ -108,6 +108,13 @@ def _passes_filters(token: dict) -> bool:
     if token.get("is_honeypot") is True:
         return False
 
+    if config.REJECT_WASH_TRADING and token.get("is_wash_trading") is True:
+        return False
+
+    rug_ratio = token.get("rug_ratio")
+    if rug_ratio is not None and rug_ratio > config.MAX_RUG_RATIO:
+        return False
+
     visiting = token.get("visiting_count")
     if visiting is not None and visiting < config.MIN_VISITING_COUNT:
         return False
@@ -159,6 +166,11 @@ def _passes_filters(token: dict) -> bool:
 
     if config.REQUIRE_OWNERSHIP_RENOUNCED:
         if token.get("ownership_renounced") is not True:
+            return False
+
+    if config.MAX_POOL_COUNT_REQUIRED:
+        pool_count = token.get("pool_count")
+        if pool_count is None or pool_count > config.MAX_POOL_COUNT:
             return False
 
     return True
@@ -292,9 +304,16 @@ async def _enrich_with_pool_data(
     addr_lower = addr.lower()
 
     confirmed: list[dict] = []
+    # Best-effort "pool competition" count: how many pools any single
+    # source found for this token, regardless of which one ended up
+    # confirming the quote pairing. Not deduped across sources (Krystal and
+    # DexPaprika may see overlapping pools) — take the max seen by any one
+    # source as a lower-bound estimate rather than trying to merge them.
+    pool_count: Optional[int] = None
 
     krystal_pools = await krystal_client.get_pools_for_token(addr)
     if krystal_pools:
+        pool_count = len(krystal_pools)
         normalized = [krystal.normalize_krystal_pool(p, addr) for p in krystal_pools]
         confirmed = [
             p for p in normalized
@@ -305,6 +324,7 @@ async def _enrich_with_pool_data(
     if not confirmed:
         dp_pools = await dp_client.get_token_pools(addr)
         if dp_pools:
+            pool_count = max(pool_count or 0, len(dp_pools))
             dp_pools_normalized = [chain_data.normalize_pool(p) for p in dp_pools]
             for p in dp_pools_normalized:
                 other_addrs = [
@@ -348,10 +368,13 @@ async def _enrich_with_pool_data(
         if not dp_pools_normalized:
             dp_pools = await dp_client.get_token_pools(addr)
             if dp_pools:
+                pool_count = max(pool_count or 0, len(dp_pools))
                 dp_pools_normalized = [chain_data.normalize_pool(p) for p in dp_pools]
         if dp_pools_normalized:
             dp_pools_normalized.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
             _apply_best_pool(token, dp_pools_normalized[0])
+
+    token["pool_count"] = pool_count
 
     _compute_pool_ratios(token)
 

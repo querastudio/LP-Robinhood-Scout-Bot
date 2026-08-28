@@ -109,13 +109,37 @@ for _pair in os.environ.get("QUOTE_ADDRESS_SYMBOLS_EXTRA", "").split(","):
         _addr, _sym = _pair.split("=", 1)
         QUOTE_ADDRESS_SYMBOLS[_addr.strip().lower()] = _sym.strip().upper()
 
+# --- Layer: Volume organicity (GMGN's own wash-trading/rug signals) ---
+# Hard reject when GMGN positively flags wash trading — a large raw volume
+# number shouldn't pass the "organic volume" bar just because it's big.
+# Unknown (field missing) does NOT reject — same graceful-N/A rule as
+# everywhere else; this only fires on a definite "yes".
+REJECT_WASH_TRADING = os.environ.get("REJECT_WASH_TRADING", "true").lower() == "true"
+# rug_ratio is a 0-1 fraction per GMGN's own data; reject when known and
+# above this threshold, skip the check when unknown.
+MAX_RUG_RATIO = _env_float("MAX_RUG_RATIO", 0.1)
+
+# --- Layer: Pool competition ---
+# pool_count is a best-effort count of how many pools were returned by
+# whichever pool-data source (Krystal/DexPaprika) had eligibility data for
+# this token — not a hard filter by default (fragmentation across many
+# small pools is a signal to weigh, not disqualify outright), shown with
+# a ✅/❌ badge in the alert. Set MAX_POOL_COUNT_REQUIRED=true to make it
+# a hard filter.
+MAX_POOL_COUNT = _env_int("MAX_POOL_COUNT", 3)
+MAX_POOL_COUNT_REQUIRED = os.environ.get("MAX_POOL_COUNT_REQUIRED", "false").lower() == "true"
+
 # --- Layer 4: Pool Health Ratios (Uniswap equivalent of the Meteora
 # Fees/TVL, Vol/TVL panel). Informational by default (shown with ✅/❌ in
 # the alert) — set *_REQUIRED=true to turn either into a hard filter.
 MIN_FEES_TVL_24H_PCT = _env_float("MIN_FEES_TVL_24H_PCT", 0.5)
 MIN_FEES_TVL_24H_REQUIRED = os.environ.get("MIN_FEES_TVL_24H_REQUIRED", "false").lower() == "true"
+# Promoted to a hard filter by default: vol/TVL is a size-normalized
+# "heavy relative volume" signal, a better fit for "volume deras" than
+# MIN_PRICE_CHANGE_1H_PCT below (which actually rewards pump-y price
+# action, working against the "organic" requirement).
 MIN_VOL_TVL_24H_PCT = _env_float("MIN_VOL_TVL_24H_PCT", 5)
-MIN_VOL_TVL_24H_REQUIRED = os.environ.get("MIN_VOL_TVL_24H_REQUIRED", "false").lower() == "true"
+MIN_VOL_TVL_24H_REQUIRED = os.environ.get("MIN_VOL_TVL_24H_REQUIRED", "true").lower() == "true"
 
 # Ownership/contract safety check via Alchemy RPC (owner() call). Bonus/
 # highlight by default since not every ERC20 exposes owner()/renounced

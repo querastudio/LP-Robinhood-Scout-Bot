@@ -131,6 +131,15 @@ def build_alert_message(token: dict) -> str:
     price_change_1h = token.get("price_change_1h")
     fee_tier_pct = token.get("fee_tier_pct")
 
+    is_wash_trading = token.get("is_wash_trading")
+    rug_ratio = token.get("rug_ratio")
+    organic_line = "N/A"
+    if is_wash_trading is not None or rug_ratio is not None:
+        flagged = is_wash_trading is True or (rug_ratio is not None and rug_ratio > config.MAX_RUG_RATIO)
+        organic_line = f"{CROSS} Flagged" if flagged else f"{CHECK} Organic"
+
+    pool_count = token.get("pool_count")
+
     ath_break = token.get("ath_break")
     if ath_break is True:
         ath_line = f"{CHECK} Broke prev ATH MCap ({fmt_usd(token.get('ath_market_cap'))})"
@@ -171,6 +180,7 @@ def build_alert_message(token: dict) -> str:
         f"Volume (1h) : {fmt_usd(vol_1h)} {_mark(vol_1h, vol_1h is not None and vol_1h >= config.MIN_VOL_1H)}",
         f"Liquidity   : {fmt_usd(liquidity)}",
         f"Total Fees  : {fmt_native(token.get('total_fees'))} {_mark(token.get('total_fees'), (token.get('total_fees') or 0) >= config.MIN_FEES if token.get('total_fees') is not None else None)}",
+        f"Volume Type : {organic_line}",
         "━━━━━━━━━━━━━━━━━━━━━",
         "🪙 TOKEN SAFETY",
         "━━━━━━━━━━━━━━━━━━━━━",
@@ -190,6 +200,7 @@ def build_alert_message(token: dict) -> str:
         f"Price Chg 1h: {fmt_pct(price_change_1h)} {_mark(price_change_1h, price_change_1h is not None and price_change_1h >= config.MIN_PRICE_CHANGE_1H_PCT)}",
         f"Avg Fees/Min: {fmt_usd(token.get('avg_fees_per_min'))}",
         f"Avg Vol/Min : {fmt_usd(token.get('avg_vol_per_min'))}",
+        f"Pool Count  : {fmt_int(pool_count)} {_mark(pool_count, pool_count is not None and pool_count <= config.MAX_POOL_COUNT)}",
         "━━━━━━━━━━━━━━━━━━━━━",
         "💸 FEE STRUCTURE",
         "━━━━━━━━━━━━━━━━━━━━━",

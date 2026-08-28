@@ -77,13 +77,16 @@ ALLOWED_FEE_TIERS_PCT = [0.01, 0.05, 0.3, 1.0]
 MIN_POOL_TVL = _env_float("MIN_POOL_TVL", 10_000)
 
 # Pool must be paired against one of these quote assets (case-insensitive
-# symbol match) — hard filter. User explicitly narrowed this from
-# ETH/WETH/USDG to USDG-only: ETH-paired pools were producing noisy/
-# unclear results, and RWA-style tokens on Robinhood Chain trade mainly
-# against USDG. Override via env (comma-separated) if this needs revisiting.
+# symbol match) — hard filter. Was briefly narrowed to USDG-only, but
+# reverted back to ETH/WETH/USDG: a real high-volume candidate (PECCY,
+# paired with tokenized AMZN per GMGN) couldn't be confirmed either way
+# because DexPaprika/GeckoTerminal were unreachable/rate-limited at check
+# time, and the user asked to widen the gate again rather than risk
+# missing real pools pending manual verification. Override via env
+# (comma-separated) if this needs revisiting.
 ALLOWED_QUOTE_SYMBOLS = [
     s.strip().upper()
-    for s in os.environ.get("ALLOWED_QUOTE_SYMBOLS", "USDG").split(",")
+    for s in os.environ.get("ALLOWED_QUOTE_SYMBOLS", "ETH,WETH,USDG").split(",")
     if s.strip()
 ]
 # Hard filter: reject the token if its best pool's fee tier is known and

@@ -3,6 +3,7 @@ import logging
 
 import config
 import screener
+from apis.geckoterminal import GeckoTerminalClient
 from utils import cooldown, formatter, telegram
 
 logging.basicConfig(
@@ -39,6 +40,14 @@ async def run() -> None:
         to_alert.append(token)
         if len(to_alert) >= config.MAX_ALERTS_RUN:
             break
+
+    if to_alert:
+        gt_client = GeckoTerminalClient()
+        try:
+            for token in to_alert:
+                await screener.enrich_with_geckoterminal(gt_client, token)
+        finally:
+            await gt_client.aclose()
 
     sent_count = 0
     for token in to_alert:

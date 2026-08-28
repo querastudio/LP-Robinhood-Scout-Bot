@@ -5,7 +5,7 @@ import time
 from typing import Optional
 
 import config
-from apis import chain_data, gmgn, krystal
+from apis import chain_data, geckoterminal, gmgn, krystal
 
 SECONDS_PER_DAY = 86_400
 MINUTES_PER_DAY = 1_440
@@ -211,6 +211,47 @@ def _clear_pool_fields(token: dict) -> None:
     token.setdefault("fees_24h_usd", None)
     token.setdefault("vol_24h_usd", None)
     token.setdefault("quote_symbol", None)
+
+
+def _apply_geckoterminal_enrichment(token: dict, best: dict) -> None:
+    """Final-pass enrichment, only called on tokens that already passed
+    every filter (see main.py's to_alert loop) — unlike _apply_best_pool's
+    setdefault (a no-op once a key exists, even set to None, which is
+    always true by this point), this explicitly overwrites remaining None
+    values so GeckoTerminal can actually backfill what Krystal/DexPaprika
+    left N/A."""
+    if token.get("dex") is None and best.get("dex"):
+        token["dex"] = best["dex"]
+    if token.get("pool_tvl") is None and best.get("tvl_usd") is not None:
+        token["pool_tvl"] = best["tvl_usd"]
+    if token.get("liquidity") is None and best.get("tvl_usd") is not None:
+        token["liquidity"] = best["tvl_usd"]
+    if token.get("vol_24h_usd") is None and best.get("volume_24h") is not None:
+        token["vol_24h_usd"] = best["volume_24h"]
+    if token.get("pool_age_days") is None and best.get("created_at") is not None:
+        try:
+            created_ts = float(best["created_at"])
+            token["pool_age_days"] = max(0.0, (time.time() - created_ts) / SECONDS_PER_DAY)
+        except (TypeError, ValueError):
+            pass
+    _compute_pool_ratios(token)
+
+
+async def enrich_with_geckoterminal(gt_client: geckoterminal.GeckoTerminalClient, token: dict) -> None:
+    """Called only on the handful of tokens about to be alerted (bounded by
+    config.MAX_ALERTS_RUN, typically 0-5/run) — never used to decide
+    pass/fail, purely to fill in whatever's still N/A after
+    Krystal/DexPaprika/GMGN. Keeps this well under GeckoTerminal's free
+    30 req/min limit without needing real rate limiting."""
+    addr = token.get("address")
+    if not addr:
+        return
+    pools = await gt_client.get_token_pools(addr)
+    if not pools:
+        return
+    normalized = [geckoterminal.normalize_pool(p, addr) for p in pools]
+    normalized.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
+    _apply_geckoterminal_enrichment(token, normalized[0])
 
 
 async def _enrich_with_pool_data(

@@ -141,9 +141,10 @@ def _filter_reasons(token: dict) -> list[str]:
     if vol_1h is not None and vol_1h < config.MIN_VOL_1H:
         reasons.append("vol_1h")
 
-    price_change_1h = token.get("price_change_1h")
-    if price_change_1h is not None and price_change_1h < config.MIN_PRICE_CHANGE_1H_PCT:
-        reasons.append("price_change_1h")
+    if config.MIN_PRICE_CHANGE_1H_REQUIRED:
+        price_change_1h = token.get("price_change_1h")
+        if price_change_1h is not None and price_change_1h < config.MIN_PRICE_CHANGE_1H_PCT:
+            reasons.append("price_change_1h")
 
     total_fees = token.get("total_fees")
     if total_fees is not None and total_fees < config.MIN_FEES:

@@ -63,7 +63,13 @@ REQUIRE_ATH_BREAK = os.environ.get("REQUIRE_ATH_BREAK", "false").lower() == "tru
 MIN_FEES = _env_float("MIN_FEES", 0.1)  # native token units (ETH)
 MIN_VOL_1H = _env_float("MIN_VOL_1H", 50_000)
 MIN_LIQUIDITY = _env_float("MIN_LIQUIDITY", 10_000)
+# Demoted from a hard filter (was the #1 rejection reason in live runs —
+# 130/151 candidates in one run — and actively worked against the
+# "organic volume" goal by requiring a pump-like price spike rather than
+# steady heavy trading). Still shown in the alert and still scored on,
+# just no longer gates pass/fail unless explicitly required.
 MIN_PRICE_CHANGE_1H_PCT = _env_float("MIN_PRICE_CHANGE_1H_PCT", 20)
+MIN_PRICE_CHANGE_1H_REQUIRED = os.environ.get("MIN_PRICE_CHANGE_1H_REQUIRED", "false").lower() == "true"
 
 # --- Layer 3: Pool Structure (Uniswap-specific) ---
 # Uniswap V3 standard fee tiers in %: 0.01, 0.05, 0.3, 1.0. V4 hooks can be custom.

@@ -88,7 +88,16 @@ def _truthy(value: Any) -> Optional[bool]:
 
 
 class RateLimiter:
-    """Simple leaky-bucket-ish limiter: at most N requests per second."""
+    """Simple leaky-bucket-ish limiter: at most N requests per second.
+
+    The lock only protects the shared _timestamps bookkeeping — it is
+    released before sleeping. Holding it across the sleep (the original
+    implementation) fully serializes every caller, including ones that
+    don't need to wait at all: with BATCH_SIZE=15 concurrent callers and a
+    retry-on-429 path that calls acquire() twice per candidate, that
+    turned a ~4 req/s limiter into an effective ~1 req/s one and stretched
+    a normally ~90s run past 10+ minutes in a live run — long enough to
+    risk overlapping with the next 5-minute cron cycle."""
 
     def __init__(self, max_per_sec: int):
         self.max_per_sec = max(1, max_per_sec)
@@ -96,14 +105,16 @@ class RateLimiter:
         self._timestamps: list[float] = []
 
     async def acquire(self) -> None:
-        async with self._lock:
-            now = time.monotonic()
-            self._timestamps = [t for t in self._timestamps if now - t < 1.0]
-            if len(self._timestamps) >= self.max_per_sec:
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                self._timestamps = [t for t in self._timestamps if now - t < 1.0]
+                if len(self._timestamps) < self.max_per_sec:
+                    self._timestamps.append(now)
+                    return
                 sleep_for = 1.0 - (now - self._timestamps[0])
-                if sleep_for > 0:
-                    await asyncio.sleep(sleep_for)
-            self._timestamps.append(time.monotonic())
+            if sleep_for > 0:
+                await asyncio.sleep(sleep_for)
 
 
 class GmgnClient:

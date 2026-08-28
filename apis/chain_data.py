@@ -120,6 +120,15 @@ def normalize_pool(pool: dict) -> dict:
         # the fee tier applied to 24h volume.
         fees_24h_usd = volume_24h * (fee_tier_pct / 100)
 
+    # /pools/search never gives a symbol for either side (see module
+    # docstring), but each entry in "tokens" does carry that side's
+    # contract address — confirmed from a live raw response. That's usable
+    # to positively confirm quote-asset pairing (match against
+    # config.QUOTE_ADDRESS_SYMBOLS) without needing Krystal at all, which
+    # matters a lot now that Krystal is permanently out of credit.
+    tokens = pool.get("tokens")
+    token_addresses = [t.get("id") for t in tokens if isinstance(t, dict) and t.get("id")] if isinstance(tokens, list) else []
+
     return {
         "pool_address": pool.get("id"),
         "dex": pool.get("dex_name") or pool.get("dex_id"),
@@ -128,6 +137,7 @@ def normalize_pool(pool: dict) -> dict:
         "volume_24h": volume_24h,
         "fees_24h_usd": fees_24h_usd,
         "created_at": _parse_iso_timestamp(pool.get("created_at")),
+        "token_addresses": token_addresses,
         "_raw": pool,
     }
 

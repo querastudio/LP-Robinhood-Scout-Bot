@@ -218,19 +218,37 @@ async def _enrich_with_pool_data(
     dp_client: chain_data.DexPaprikaClient,
     token: dict,
 ) -> None:
-    """Hard gate: a token only passes the ETH/WETH/USDG pairing requirement
-    when we can POSITIVELY CONFIRM a pool paired with an allowed quote
-    asset. Any other outcome — unknown quote symbol, missing data, an API
-    call failing outright — rejects the token (no_eligible_quote_pair =
-    True). This deliberately breaks from this bot's usual graceful-N/A
-    default: the user asked for this specific filter to fail closed, not
-    open, after a token with an unconfirmed pairing ("Bucket/ROBIN" — the
-    "ROBIN" was just the formatter's unknown-symbol placeholder text, not
-    real pairing data) slipped through and got alerted."""
+    """Hard gate: a token only passes the USDG (or configured quote symbol)
+    pairing requirement when we can POSITIVELY CONFIRM a pool paired with
+    an allowed quote asset. Any other outcome — unknown quote symbol,
+    missing data, an API call failing outright — rejects the token
+    (no_eligible_quote_pair = True). This deliberately breaks from this
+    bot's usual graceful-N/A default: the user asked for this specific
+    filter to fail closed, not open, after a token with an unconfirmed
+    pairing ("Bucket/ROBIN" — the "ROBIN" was just the formatter's
+    unknown-symbol placeholder text, not real pairing data) slipped
+    through and got alerted.
+
+    Three independent confirmation sources are tried in order, since
+    Krystal Cloud is permanently out of credit (every call 402s) and can
+    no longer be relied on alone — without a second source almost nothing
+    could pass this gate at all (0/254 candidates in one live run):
+
+    1. Krystal /v1/pools — reports quote_symbol directly. Still tried
+       first since it's the most complete source when it works.
+    2. DexPaprika /pools/search — reports no symbol, but each pool's
+       "tokens" list does carry that side's contract ADDRESS. Matched
+       against config.QUOTE_ADDRESS_SYMBOLS (e.g. USDG's known contract)
+       this confirms pairing just as validly as a symbol match, and
+       doesn't depend on Krystal at all.
+    3. GMGN's own quote_address field, same address-matching idea, as a
+       last resort for tokens DexPaprika hasn't indexed a pool for yet.
+    """
     addr = token.get("address")
     if not addr:
         token["no_eligible_quote_pair"] = True
         return
+    addr_lower = addr.lower()
 
     confirmed: list[dict] = []
 
@@ -242,10 +260,31 @@ async def _enrich_with_pool_data(
             if p.get("quote_symbol") and p["quote_symbol"].upper() in config.ALLOWED_QUOTE_SYMBOLS
         ]
 
+    dp_pools_normalized: list[dict] = []
+    if not confirmed:
+        dp_pools = await dp_client.get_token_pools(addr)
+        if dp_pools:
+            dp_pools_normalized = [chain_data.normalize_pool(p) for p in dp_pools]
+            for p in dp_pools_normalized:
+                other_addrs = [
+                    a for a in (p.get("token_addresses") or [])
+                    if a and a.lower() != addr_lower
+                ]
+                matched_symbol = next(
+                    (
+                        config.QUOTE_ADDRESS_SYMBOLS[a.lower()]
+                        for a in other_addrs
+                        if config.QUOTE_ADDRESS_SYMBOLS.get(a.lower(), "").upper() in config.ALLOWED_QUOTE_SYMBOLS
+                    ),
+                    None,
+                )
+                if matched_symbol:
+                    p["quote_symbol"] = matched_symbol
+                    confirmed.append(p)
+
     if not confirmed:
         # GMGN's own quote_address field (e.g. the zero address = native
-        # ETH) can also positively confirm pairing when Krystal has no
-        # eligible pool for this token.
+        # ETH, or USDG's contract) as a last-resort confirmation source.
         quote_address = token.get("quote_address")
         quote_symbol = config.QUOTE_ADDRESS_SYMBOLS.get(str(quote_address).lower()) if quote_address else None
         if quote_symbol and quote_symbol.upper() in config.ALLOWED_QUOTE_SYMBOLS:
@@ -259,16 +298,19 @@ async def _enrich_with_pool_data(
         confirmed.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
         _apply_best_pool(token, confirmed[0])
 
-    # Pairing is confirmed at this point (via Krystal or GMGN). DexPaprika
-    # can't confirm pairing itself (no quote-token field), but is still
-    # useful here purely to fill in TVL/fee metrics if Krystal didn't have
-    # them — it can never be the sole basis for passing the pairing gate.
+    # Pairing is confirmed at this point. If we haven't already fetched
+    # DexPaprika pools above (Krystal alone confirmed it) and still lack
+    # TVL/fee numbers, fetch them now purely to fill in metrics — DexPaprika
+    # is never the sole basis for the pairing gate itself when reached this
+    # way, since pairing was already confirmed via Krystal above.
     if token.get("pool_tvl") is None:
-        dp_pools = await dp_client.get_token_pools(addr)
-        if dp_pools:
-            normalized_dp = [chain_data.normalize_pool(p) for p in dp_pools]
-            normalized_dp.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
-            _apply_best_pool(token, normalized_dp[0])
+        if not dp_pools_normalized:
+            dp_pools = await dp_client.get_token_pools(addr)
+            if dp_pools:
+                dp_pools_normalized = [chain_data.normalize_pool(p) for p in dp_pools]
+        if dp_pools_normalized:
+            dp_pools_normalized.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
+            _apply_best_pool(token, dp_pools_normalized[0])
 
     _compute_pool_ratios(token)
 

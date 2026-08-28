@@ -22,6 +22,7 @@ satisfy the ETH/WETH/USDG pairing gate itself.
 All lookups fail soft (return None / [] on error) so a missing data
 source never crashes the bot or blocks unrelated filters.
 """
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -71,6 +72,16 @@ class DexPaprikaClient:
             logger.info("DexPaprika pools lookup returned invalid JSON for %s: %s", token_address, e)
             return []
         items = data.get("results") if isinstance(data, dict) else data
+        if config.DEBUG_API_RAW and items:
+            # Never used to log raw output before — added while investigating
+            # why USDG-paired fresh pairs were getting rejected, to check
+            # whether this endpoint's pool objects carry per-side token
+            # addresses (undocumented by the SDK) that could be a second way
+            # to confirm quote pairing once Krystal credit is gone.
+            text = json.dumps(items[0], ensure_ascii=False)
+            if len(text) > 2000:
+                text = text[:2000] + f"... [truncated, {len(text)} chars total]"
+            logger.info("RAW DexPaprika /pools/search first result for %s: %s", token_address, text)
         return items or []
 
 

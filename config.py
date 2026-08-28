@@ -71,12 +71,13 @@ ALLOWED_FEE_TIERS_PCT = [0.01, 0.05, 0.3, 1.0]
 MIN_POOL_TVL = _env_float("MIN_POOL_TVL", 10_000)
 
 # Pool must be paired against one of these quote assets (case-insensitive
-# symbol match) — hard filter. WETH covers the native-wrapped pair; add
-# more via env (comma-separated) if Robinhood Chain's DEXs use a different
-# wrapped-native symbol.
+# symbol match) — hard filter. User explicitly narrowed this from
+# ETH/WETH/USDG to USDG-only: ETH-paired pools were producing noisy/
+# unclear results, and RWA-style tokens on Robinhood Chain trade mainly
+# against USDG. Override via env (comma-separated) if this needs revisiting.
 ALLOWED_QUOTE_SYMBOLS = [
     s.strip().upper()
-    for s in os.environ.get("ALLOWED_QUOTE_SYMBOLS", "ETH,WETH,USDG").split(",")
+    for s in os.environ.get("ALLOWED_QUOTE_SYMBOLS", "USDG").split(",")
     if s.strip()
 ]
 # Hard filter: reject the token if its best pool's fee tier is known and
@@ -85,13 +86,23 @@ ALLOWED_QUOTE_SYMBOLS = [
 MIN_BASE_FEE_PCT = _env_float("MIN_BASE_FEE_PCT", 2.0)
 
 # Fallback quote-asset resolution when Krystal/DexPaprika pool lookups fail
-# outright (e.g. Krystal 403 without an API key): map GMGN's quote_address
-# field to a symbol. The zero address is GMGN's sentinel for "paired with
-# the chain's native token" (ETH on Robinhood Chain) — confirmed from a
-# live token_signal response. Add more via env (JSON-less, comma pairs of
-# address=symbol) if other quote token addresses are identified.
+# outright (e.g. Krystal out of credit, or DexPaprika lacking a symbol
+# field): map GMGN's quote_address field to a symbol. The zero address is
+# GMGN's sentinel for "paired with the chain's native token" (ETH on
+# Robinhood Chain) — confirmed from a live token_signal response. USDG's
+# address is Robinhood Chain's official Global Dollar contract, confirmed
+# via Blockscout + GeckoTerminal pool listings (chain id 4663):
+# https://robinhoodchain.blockscout.com/token/0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168
+# This fallback matters a lot now that Krystal is permanently out of
+# credit — without it, every USDG-paired fresh pair fails the pairing
+# gate simply because nothing could confirm it (not because it's actually
+# ineligible), which was the root cause of "no quality pairs found" even
+# on days with real USDG launches (AGI Frog/CPU/microduck-style pons_v2
+# launchpad tokens). Add more via env (comma pairs of address=symbol) if
+# other quote token addresses are identified.
 QUOTE_ADDRESS_SYMBOLS = {
     "0x0000000000000000000000000000000000000000": "ETH",
+    "0x5fc5360d0400a0fd4f2af552add042d716f1d168": "USDG",
 }
 for _pair in os.environ.get("QUOTE_ADDRESS_SYMBOLS_EXTRA", "").split(","):
     if "=" in _pair:

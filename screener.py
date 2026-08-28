@@ -144,9 +144,8 @@ def _filter_reasons(token: dict) -> list[str]:
     if pool_liquidity is not None and pool_liquidity < config.MIN_LIQUIDITY:
         reasons.append("liquidity")
 
-    vol_1h = token.get("volume_1h")
-    if vol_1h is not None and vol_1h < config.MIN_VOL_1H:
-        reasons.append("vol_1h")
+    # volume_1h is no longer a hard filter — see MIN_VOL_5M in config.py,
+    # enforced at send time in main.py against GeckoTerminal's real m5 data.
 
     if config.MIN_PRICE_CHANGE_1H_REQUIRED:
         price_change_1h = token.get("price_change_1h")
@@ -259,6 +258,11 @@ def _apply_geckoterminal_enrichment(token: dict, best: dict) -> None:
         token["liquidity"] = best["tvl_usd"]
     if token.get("vol_24h_usd") is None and best.get("volume_24h") is not None:
         token["vol_24h_usd"] = best["volume_24h"]
+    # volume_5m has no other source (GMGN/DexPaprika don't expose m5
+    # granularity) — always take GeckoTerminal's value rather than only
+    # filling a None, since this is the one field expected to come from
+    # here specifically.
+    token["volume_5m"] = best.get("volume_5m")
     if token.get("pool_age_days") is None and best.get("created_at") is not None:
         try:
             created_ts = float(best["created_at"])

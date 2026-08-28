@@ -61,8 +61,20 @@ REQUIRE_ATH_BREAK = os.environ.get("REQUIRE_ATH_BREAK", "false").lower() == "tru
 
 # --- Layer 2: Fees & Volume ---
 MIN_FEES = _env_float("MIN_FEES", 0.1)  # native token units (ETH)
+# No longer a hard filter (see MIN_VOL_5M below) — GMGN's "volume_1h" is
+# only real for token_signal candidates; hot_searches/rank fall back to a
+# generic, un-windowed "volume" field, making this an unreliable gate.
+# Kept for display/scoring only.
 MIN_VOL_1H = _env_float("MIN_VOL_1H", 50_000)
 MIN_LIQUIDITY = _env_float("MIN_LIQUIDITY", 10_000)
+# Real "volume deras" hard gate: last-5-minute volume must show an actual
+# spike, not just a healthy-looking 1h/24h aggregate. Checked at send time
+# via GeckoTerminal (the only source with real m5 granularity —
+# GMGN/DexPaprika don't expose it), on the same call already made there
+# for final-pass enrichment, so it costs no extra API budget. Fails
+# closed: unknown (GeckoTerminal has no data yet) does not pass, matching
+# how the user described this as a definite "there IS a spike" condition.
+MIN_VOL_5M = _env_float("MIN_VOL_5M", 100_000)
 # Demoted from a hard filter (was the #1 rejection reason in live runs —
 # 130/151 candidates in one run — and actively worked against the
 # "organic volume" goal by requiring a pump-like price spike rather than
@@ -148,12 +160,15 @@ MAX_POOL_COUNT_REQUIRED = os.environ.get("MAX_POOL_COUNT_REQUIRED", "false").low
 # the alert) — set *_REQUIRED=true to turn either into a hard filter.
 MIN_FEES_TVL_24H_PCT = _env_float("MIN_FEES_TVL_24H_PCT", 0.5)
 MIN_FEES_TVL_24H_REQUIRED = os.environ.get("MIN_FEES_TVL_24H_REQUIRED", "false").lower() == "true"
-# Promoted to a hard filter by default: vol/TVL is a size-normalized
-# "heavy relative volume" signal, a better fit for "volume deras" than
-# MIN_PRICE_CHANGE_1H_PCT below (which actually rewards pump-y price
-# action, working against the "organic" requirement).
+# Reverted to informational-only (opsi A): depends on pool_tvl/vol_24h,
+# both sourced from the same DexPaprika endpoint that's been repeatedly
+# observed 429-failing for real, otherwise-qualifying candidates (NTF,
+# MAST) — hard-requiring it punished missing data as if it were bad
+# data. The volume_5m spike gate below (MIN_VOL_5M, checked via
+# GeckoTerminal right before sending) is now the real "volume deras"
+# hard gate instead.
 MIN_VOL_TVL_24H_PCT = _env_float("MIN_VOL_TVL_24H_PCT", 5)
-MIN_VOL_TVL_24H_REQUIRED = os.environ.get("MIN_VOL_TVL_24H_REQUIRED", "true").lower() == "true"
+MIN_VOL_TVL_24H_REQUIRED = os.environ.get("MIN_VOL_TVL_24H_REQUIRED", "false").lower() == "true"
 
 # Ownership/contract safety check via Alchemy RPC (owner() call). Bonus/
 # highlight by default since not every ERC20 exposes owner()/renounced

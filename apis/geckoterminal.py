@@ -120,6 +120,10 @@ def normalize_pool(pool: dict, token_address: str) -> dict:
         "dex": dex_id,
         "tvl_usd": tvl_usd,
         "volume_24h": _to_float(volume_usd.get("h24")),
+        # Real last-5-minute volume — confirmed present in a live raw
+        # response ("volume_usd": {"m5": ..., "m15": ..., ...}). Nothing
+        # else we use (GMGN, DexPaprika) exposes this granularity.
+        "volume_5m": _to_float(volume_usd.get("m5")),
         "created_at": _parse_iso_timestamp(attrs.get("pool_created_at")),
         "other_token_address": other_addr,
         "_raw": pool,

@@ -29,7 +29,7 @@ async def run() -> None:
     passing, total_scanned = await screener.run_screen()
 
     skipped_cooldown = 0
-    to_alert = []
+    candidates = []
     for token in passing:
         key = token.get("address")
         if not key:
@@ -37,15 +37,28 @@ async def run() -> None:
         if cooldown.is_on_cooldown(state, key):
             skipped_cooldown += 1
             continue
-        to_alert.append(token)
-        if len(to_alert) >= config.MAX_ALERTS_RUN:
-            break
+        candidates.append(token)
 
-    if to_alert:
+    # Real "volume deras" hard gate: last-5-minute volume must show an
+    # actual spike (config.MIN_VOL_5M), checked via GeckoTerminal — the
+    # only source with true m5 granularity. Walks every cooldown-cleared
+    # candidate (not just the first MAX_ALERTS_RUN) so a token that fails
+    # the spike check doesn't consume one of the run's alert slots; fails
+    # closed (no GeckoTerminal data = no spike confirmed = skipped).
+    skipped_no_spike = 0
+    to_alert = []
+    if candidates:
         gt_client = GeckoTerminalClient()
         try:
-            for token in to_alert:
+            for token in candidates:
                 await screener.enrich_with_geckoterminal(gt_client, token)
+                vol_5m = token.get("volume_5m")
+                if vol_5m is None or vol_5m < config.MIN_VOL_5M:
+                    skipped_no_spike += 1
+                    continue
+                to_alert.append(token)
+                if len(to_alert) >= config.MAX_ALERTS_RUN:
+                    break
         finally:
             await gt_client.aclose()
 
@@ -67,8 +80,8 @@ async def run() -> None:
 
     cooldown.save(state)
     logger.info(
-        "Run complete: scanned=%d passing=%d sent=%d skipped_cooldown=%d",
-        total_scanned, len(passing), sent_count, skipped_cooldown,
+        "Run complete: scanned=%d passing=%d sent=%d skipped_cooldown=%d skipped_no_spike=%d",
+        total_scanned, len(passing), sent_count, skipped_cooldown, skipped_no_spike,
     )
 
 

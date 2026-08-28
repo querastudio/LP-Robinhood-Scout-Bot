@@ -93,6 +93,16 @@ def now_wib_str() -> str:
     return datetime.now(WIB).strftime("%d %b %Y, %H:%M WIB")
 
 
+def _fmt_spike_ratio(vol_5m: Optional[float], baseline: Optional[float]) -> str:
+    if vol_5m is None:
+        return "N/A"
+    if not baseline:
+        return "N/A (no baseline)"
+    ratio = vol_5m / baseline
+    mark = CHECK if ratio >= config.VOL_5M_SPIKE_MULTIPLIER else CROSS
+    return f"{ratio:.1f}x avg {mark}"
+
+
 def _mark(value: Optional[Any], passes: Optional[bool]) -> str:
     """✅ / ❌ / ⚪ badge. `value` is the raw metric (None -> unknown/N/A
     regardless of `passes`); `passes` is the pre-computed pass/fail bool."""
@@ -178,6 +188,7 @@ def build_alert_message(token: dict) -> str:
         f"Market Cap  : {fmt_usd(mcap)} {_mark(mcap, mcap is not None and config.MIN_MCAP <= mcap <= config.MAX_MCAP)}",
         f"Price       : {fmt_price(price)}",
         f"Volume (5m) : {fmt_usd(token.get('volume_5m'))} {_mark(token.get('volume_5m'), token.get('volume_5m') is not None and token.get('volume_5m') >= config.MIN_VOL_5M)}",
+        f"Vol Spike   : {_fmt_spike_ratio(token.get('volume_5m'), token.get('volume_5m_baseline'))}",
         f"Volume (1h) : {fmt_usd(vol_1h)}",
         f"Liquidity   : {fmt_usd(liquidity)}",
         f"Total Fees  : {fmt_native(token.get('total_fees'))} {_mark(token.get('total_fees'), (token.get('total_fees') or 0) >= config.MIN_FEES if token.get('total_fees') is not None else None)}",

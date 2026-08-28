@@ -263,6 +263,11 @@ def _apply_geckoterminal_enrichment(token: dict, best: dict) -> None:
     # filling a None, since this is the one field expected to come from
     # here specifically.
     token["volume_5m"] = best.get("volume_5m")
+    # 5-min average baseline from the pool's own hourly volume (h1/12),
+    # used to detect a real spike relative to the token's normal activity
+    # rather than just checking an absolute dollar figure.
+    vol_1h_pool = best.get("volume_1h_pool")
+    token["volume_5m_baseline"] = (vol_1h_pool / 12) if vol_1h_pool else None
     if token.get("pool_age_days") is None and best.get("created_at") is not None:
         try:
             created_ts = float(best["created_at"])

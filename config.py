@@ -71,10 +71,21 @@ MIN_LIQUIDITY = _env_float("MIN_LIQUIDITY", 10_000)
 # spike, not just a healthy-looking 1h/24h aggregate. Checked at send time
 # via GeckoTerminal (the only source with real m5 granularity —
 # GMGN/DexPaprika don't expose it), on the same call already made there
-# for final-pass enrichment, so it costs no extra API budget. Fails
-# closed: unknown (GeckoTerminal has no data yet) does not pass, matching
-# how the user described this as a definite "there IS a spike" condition.
-MIN_VOL_5M = _env_float("MIN_VOL_5M", 100_000)
+# for final-pass enrichment, so it costs no extra API budget.
+# Two parts, per the user's own framing ("intinya ada spike volume tinggi
+# dibanding rata-rata volume yang diterima tokennya" — the point is a
+# spike relative to the token's own average, not just a big number):
+# - MIN_VOL_5M: absolute floor in USD, always required. Loosened from
+#   $100k to $50k after a live run showed $100k rejected everything
+#   (0/23 candidates checked cleared it).
+# - VOL_5M_SPIKE_MULTIPLIER: the real "spike" signal — m5 volume must be
+#   at least Nx the pool's own hourly-average 5-min rate (h1 volume / 12,
+#   from the same GeckoTerminal pool object). Graceful when h1 data is
+#   missing (falls back to the floor alone) since it's a refinement on
+#   top of the floor, not a separate hard requirement.
+# Both fail closed on volume_5m itself: unknown 5m volume never passes.
+MIN_VOL_5M = _env_float("MIN_VOL_5M", 50_000)
+VOL_5M_SPIKE_MULTIPLIER = _env_float("VOL_5M_SPIKE_MULTIPLIER", 3.0)
 # Demoted from a hard filter (was the #1 rejection reason in live runs —
 # 130/151 candidates in one run — and actively worked against the
 # "organic volume" goal by requiring a pump-like price spike rather than

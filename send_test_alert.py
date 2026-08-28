@@ -18,6 +18,7 @@ SAMPLE_TOKEN = {
     "fees_source": "GMGN Hot Search",
     "price": 0.00071890,
     "volume_5m": 142_800,
+    "volume_5m_baseline": 31_600,
     "volume_1h": 379_600,
     "liquidity": 80_200,
     "price_change_1h": 127.03,

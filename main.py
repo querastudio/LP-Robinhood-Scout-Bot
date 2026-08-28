@@ -39,12 +39,16 @@ async def run() -> None:
             continue
         candidates.append(token)
 
-    # Real "volume deras" hard gate: last-5-minute volume must show an
-    # actual spike (config.MIN_VOL_5M), checked via GeckoTerminal — the
-    # only source with true m5 granularity. Walks every cooldown-cleared
-    # candidate (not just the first MAX_ALERTS_RUN) so a token that fails
-    # the spike check doesn't consume one of the run's alert slots; fails
-    # closed (no GeckoTerminal data = no spike confirmed = skipped).
+    # Real "volume deras" hard gate: last-5-minute volume must clear an
+    # absolute floor (config.MIN_VOL_5M) AND show a real spike relative to
+    # the token's own average activity (config.VOL_5M_SPIKE_MULTIPLIER x
+    # its hourly-average 5-min rate) — per the user's framing, the relative
+    # spike is the real point, the floor just a sanity backstop. Checked
+    # via GeckoTerminal, the only source with true m5 granularity. Walks
+    # every cooldown-cleared candidate (not just the first MAX_ALERTS_RUN)
+    # so a token that fails the spike check doesn't consume an alert slot;
+    # fails closed on volume_5m itself (no GeckoTerminal data = skipped),
+    # but gracefully skips the relative check when no h1 baseline exists.
     skipped_no_spike = 0
     to_alert = []
     if candidates:
@@ -54,6 +58,10 @@ async def run() -> None:
                 await screener.enrich_with_geckoterminal(gt_client, token)
                 vol_5m = token.get("volume_5m")
                 if vol_5m is None or vol_5m < config.MIN_VOL_5M:
+                    skipped_no_spike += 1
+                    continue
+                baseline = token.get("volume_5m_baseline")
+                if baseline and vol_5m < config.VOL_5M_SPIKE_MULTIPLIER * baseline:
                     skipped_no_spike += 1
                     continue
                 to_alert.append(token)

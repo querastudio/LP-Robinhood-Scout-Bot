@@ -124,6 +124,10 @@ def normalize_pool(pool: dict, token_address: str) -> dict:
         # response ("volume_usd": {"m5": ..., "m15": ..., ...}). Nothing
         # else we use (GMGN, DexPaprika) exposes this granularity.
         "volume_5m": _to_float(volume_usd.get("m5")),
+        # Same pool's 1h volume, used only to compute a "5-min average"
+        # baseline (h1/12) for spike detection — distinct from the
+        # token-level volume_1h GMGN already supplies for display.
+        "volume_1h_pool": _to_float(volume_usd.get("h1")),
         "created_at": _parse_iso_timestamp(attrs.get("pool_created_at")),
         "other_token_address": other_addr,
         "_raw": pool,

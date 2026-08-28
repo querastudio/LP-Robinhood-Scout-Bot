@@ -133,8 +133,15 @@ def _filter_reasons(token: dict) -> list[str]:
     if config.REQUIRE_ATH_BREAK and token.get("ath_break") is not True:
         reasons.append("ath_break")
 
-    liquidity = token.get("liquidity")
-    if liquidity is not None and liquidity < config.MIN_LIQUIDITY:
+    # Prefer pool_tvl (the actual confirmed USDG pool's TVL) over GMGN's
+    # generic "liquidity" field. A real case slipped through on the
+    # generic field: pool_tvl was $360 (the confirmed USDG pool was
+    # basically empty) while GMGN's liquidity reported $46.3K — presumably
+    # aggregated across other pools/pairs that aren't the one we're
+    # actually alerting on. Checking the specific pool's own TVL is the
+    # only way this filter means what it says.
+    pool_liquidity = token.get("pool_tvl") if token.get("pool_tvl") is not None else token.get("liquidity")
+    if pool_liquidity is not None and pool_liquidity < config.MIN_LIQUIDITY:
         reasons.append("liquidity")
 
     vol_1h = token.get("volume_1h")

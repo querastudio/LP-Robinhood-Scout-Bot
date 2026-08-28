@@ -128,12 +128,12 @@ MAX_RUG_RATIO = _env_float("MAX_RUG_RATIO", 0.1)
 # --- Layer: Pool competition ---
 # pool_count is a best-effort count of how many pools were returned by
 # whichever pool-data source (Krystal/DexPaprika) had eligibility data for
-# this token — not a hard filter by default (fragmentation across many
-# small pools is a signal to weigh, not disqualify outright), shown with
-# a ✅/❌ badge in the alert. Set MAX_POOL_COUNT_REQUIRED=true to make it
-# a hard filter.
+# this token. Promoted to a hard filter after a live example (BIGLY,
+# pool_count=6) showed real fragmentation — volume/TVL spread thin across
+# many pools, with the confirmed USDG pool holding basically no liquidity
+# ($360 TVL) despite the token's overall numbers looking healthy.
 MAX_POOL_COUNT = _env_int("MAX_POOL_COUNT", 3)
-MAX_POOL_COUNT_REQUIRED = os.environ.get("MAX_POOL_COUNT_REQUIRED", "false").lower() == "true"
+MAX_POOL_COUNT_REQUIRED = os.environ.get("MAX_POOL_COUNT_REQUIRED", "true").lower() == "true"
 
 # --- Layer 4: Pool Health Ratios (Uniswap equivalent of the Meteora
 # Fees/TVL, Vol/TVL panel). Informational by default (shown with ✅/❌ in

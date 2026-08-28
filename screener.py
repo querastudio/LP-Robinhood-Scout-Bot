@@ -340,8 +340,10 @@ async def _enrich_with_pool_data(
         ]
 
     dp_pools_normalized: list[dict] = []
+    dp_attempted = False
     if not confirmed:
         dp_pools = await dp_client.get_token_pools(addr)
+        dp_attempted = True
         if dp_pools:
             pool_count = max(pool_count or 0, len(dp_pools))
             dp_pools_normalized = [chain_data.normalize_pool(p) for p in dp_pools]
@@ -384,7 +386,7 @@ async def _enrich_with_pool_data(
     # is never the sole basis for the pairing gate itself when reached this
     # way, since pairing was already confirmed via Krystal above.
     if token.get("pool_tvl") is None:
-        if not dp_pools_normalized:
+        if not dp_pools_normalized and not dp_attempted:
             dp_pools = await dp_client.get_token_pools(addr)
             if dp_pools:
                 pool_count = max(pool_count or 0, len(dp_pools))

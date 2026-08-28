@@ -86,61 +86,68 @@ def _cheap_prefilter(token: dict) -> bool:
     return True
 
 
-def _passes_filters(token: dict) -> bool:
+def _filter_reasons(token: dict) -> list[str]:
+    """Returns every filter this token fails (empty list = passes). Used
+    both by _passes_filters and by run_screen's rejection-reason tally —
+    unlike an early-return chain, this always evaluates every check, so the
+    tally reflects the real failure distribution instead of just whichever
+    check happens to run first."""
+    reasons: list[str] = []
+
     mcap = token.get("market_cap")
     if mcap is not None and not (config.MIN_MCAP <= mcap <= config.MAX_MCAP):
-        return False
+        reasons.append("mcap")
 
     holders = token.get("holder_count")
     if holders is not None and holders < config.MIN_HOLDERS:
-        return False
+        reasons.append("holders")
 
     top10 = token.get("top_10_holder_rate")
     if top10 is not None:
         top10_pct = top10 * 100 if top10 <= 1 else top10
         if top10_pct > config.MAX_TOP10_PCT:
-            return False
+            reasons.append("top10_pct")
 
     age = token.get("token_age_days")
     if age is not None and age < config.MIN_TOKEN_AGE_DAYS:
-        return False
+        reasons.append("token_age")
 
     if token.get("is_honeypot") is True:
-        return False
+        reasons.append("honeypot")
 
     if config.REJECT_WASH_TRADING and token.get("is_wash_trading") is True:
-        return False
+        reasons.append("wash_trading")
 
     rug_ratio = token.get("rug_ratio")
     if rug_ratio is not None and rug_ratio > config.MAX_RUG_RATIO:
-        return False
+        reasons.append("rug_ratio")
 
     visiting = token.get("visiting_count")
     if visiting is not None and visiting < config.MIN_VISITING_COUNT:
-        return False
+        reasons.append("visiting_count")
 
     if config.MIN_HOT_SEARCH_RANK and token.get("hot_search_rank") is not None:
         if token["hot_search_rank"] > config.MIN_HOT_SEARCH_RANK:
-            return False
+            reasons.append("hot_search_rank")
 
     if config.REQUIRE_ATH_BREAK and token.get("ath_break") is not True:
-        return False
+        reasons.append("ath_break")
 
     liquidity = token.get("liquidity")
     if liquidity is not None and liquidity < config.MIN_LIQUIDITY:
-        return False
+        reasons.append("liquidity")
 
     vol_1h = token.get("volume_1h")
     if vol_1h is not None and vol_1h < config.MIN_VOL_1H:
-        return False
+        reasons.append("vol_1h")
 
     price_change_1h = token.get("price_change_1h")
     if price_change_1h is not None and price_change_1h < config.MIN_PRICE_CHANGE_1H_PCT:
-        return False
+        reasons.append("price_change_1h")
 
     total_fees = token.get("total_fees")
     if total_fees is not None and total_fees < config.MIN_FEES:
-        return False
+        reasons.append("total_fees")
 
     # Pool must be paired with ETH/WETH/USDG (or configured quote symbols),
     # and its fee tier must be known and >= MIN_BASE_FEE_PCT. Both are hard
@@ -148,32 +155,36 @@ def _passes_filters(token: dict) -> bool:
     # is only set once pool data was successfully fetched) — an outright API
     # failure (unknown state) still falls through gracefully, unlike these.
     if token.get("no_eligible_quote_pair") is True:
-        return False
+        reasons.append("no_eligible_quote_pair")
 
     fee_tier_pct = token.get("fee_tier_pct")
     if fee_tier_pct is not None and fee_tier_pct < config.MIN_BASE_FEE_PCT:
-        return False
+        reasons.append("fee_tier_pct")
 
     if config.MIN_FEES_TVL_24H_REQUIRED:
         fees_tvl_pct = token.get("fees_tvl_24h_pct")
         if fees_tvl_pct is None or fees_tvl_pct < config.MIN_FEES_TVL_24H_PCT:
-            return False
+            reasons.append("fees_tvl_24h")
 
     if config.MIN_VOL_TVL_24H_REQUIRED:
         vol_tvl_pct = token.get("vol_tvl_24h_pct")
         if vol_tvl_pct is None or vol_tvl_pct < config.MIN_VOL_TVL_24H_PCT:
-            return False
+            reasons.append("vol_tvl_24h")
 
     if config.REQUIRE_OWNERSHIP_RENOUNCED:
         if token.get("ownership_renounced") is not True:
-            return False
+            reasons.append("ownership_renounced")
 
     if config.MAX_POOL_COUNT_REQUIRED:
         pool_count = token.get("pool_count")
         if pool_count is None or pool_count > config.MAX_POOL_COUNT:
-            return False
+            reasons.append("pool_count")
 
-    return True
+    return reasons
+
+
+def _passes_filters(token: dict) -> bool:
+    return not _filter_reasons(token)
 
 
 def _score(token: dict) -> float:
@@ -433,12 +444,27 @@ async def run_screen() -> tuple[list[dict], int]:
         ownership_coros = [_enrich_with_ownership(alchemy_client, t) for t in prefiltered]
         await _batched(ownership_coros, config.BATCH_SIZE)
 
-        passing = [t for t in prefiltered if _passes_filters(t)]
+        passing: list[dict] = []
+        reason_counts: dict[str, int] = {}
+        for t in prefiltered:
+            reasons = _filter_reasons(t)
+            if reasons:
+                for r in reasons:
+                    reason_counts[r] = reason_counts.get(r, 0) + 1
+            else:
+                passing.append(t)
         for t in passing:
             t["score"] = _score(t)
         passing.sort(key=lambda t: t["score"], reverse=True)
 
         logger.info("%d candidates passed all filters", len(passing))
+        if reason_counts:
+            top_reasons = sorted(reason_counts.items(), key=lambda kv: kv[1], reverse=True)
+            logger.info(
+                "Rejection reasons (out of %d prefiltered, a candidate can fail more than one): %s",
+                len(prefiltered),
+                ", ".join(f"{name}={count}" for name, count in top_reasons),
+            )
         return passing, total_scanned
     finally:
         await gmgn_client.aclose()

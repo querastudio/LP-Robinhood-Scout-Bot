@@ -22,6 +22,7 @@ satisfy the ETH/WETH/USDG pairing gate itself.
 All lookups fail soft (return None / [] on error) so a missing data
 source never crashes the bot or blocks unrelated filters.
 """
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -51,25 +52,47 @@ class DexPaprikaClient:
     async def get_token_pools(self, token_address: str) -> list[dict]:
         """List pools for a token on the Robinhood network via the current
         /pools/search endpoint (the old /tokens/{address}/pools route was
-        removed and returns 410)."""
-        await self._limiter.acquire()
-        try:
-            resp = await self._client.get(
-                f"/networks/{config.DEXPAPRIKA_NETWORK}/pools/search",
-                params={
-                    "token_address": token_address,
-                    "limit": 20,
-                    "sort": "desc",
-                    "order_by": "liquidity_usd",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except httpx.HTTPError as e:
-            logger.info("DexPaprika pools lookup failed for %s: %s", token_address, e)
-            return []
-        except ValueError as e:
-            logger.info("DexPaprika pools lookup returned invalid JSON for %s: %s", token_address, e)
+        removed and returns 410).
+
+        Retries once on 429: with dozens of candidates hitting the shared
+        rate limiter in the same batch, a 429 usually just means this
+        particular request landed on the wrong side of the limiter's 1s
+        window, not that the token has no data — a short wait and one
+        retry recovers most of these instead of silently losing the pool
+        data (which was observed happening to real candidates, e.g. a
+        user-reported token got 429'd on 2 separate live runs in a row)."""
+        data = None
+        for attempt in range(2):
+            await self._limiter.acquire()
+            try:
+                resp = await self._client.get(
+                    f"/networks/{config.DEXPAPRIKA_NETWORK}/pools/search",
+                    params={
+                        "token_address": token_address,
+                        "limit": 20,
+                        "sort": "desc",
+                        "order_by": "liquidity_usd",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt == 0:
+                    await asyncio.sleep(0.5)
+                    continue
+                logger.info(
+                    "DexPaprika pools lookup failed for %s: HTTP %s",
+                    token_address, e.response.status_code,
+                )
+                return []
+            except httpx.HTTPError as e:
+                logger.info("DexPaprika pools lookup failed for %s: %s", token_address, e)
+                return []
+            except ValueError as e:
+                logger.info("DexPaprika pools lookup returned invalid JSON for %s: %s", token_address, e)
+                return []
+        if data is None:
             return []
         items = data.get("results") if isinstance(data, dict) else data
         if config.DEBUG_API_RAW and items:

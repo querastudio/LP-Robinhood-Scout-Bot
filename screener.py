@@ -299,16 +299,19 @@ async def _enrich_with_pool_data(
     dp_client: chain_data.DexPaprikaClient,
     token: dict,
 ) -> None:
-    """Hard gate: a token only passes the USDG (or configured quote symbol)
-    pairing requirement when we can POSITIVELY CONFIRM a pool paired with
-    an allowed quote asset. Any other outcome — unknown quote symbol,
-    missing data, an API call failing outright — rejects the token
-    (no_eligible_quote_pair = True). This deliberately breaks from this
-    bot's usual graceful-N/A default: the user asked for this specific
-    filter to fail closed, not open, after a token with an unconfirmed
-    pairing ("Bucket/ROBIN" — the "ROBIN" was just the formatter's
-    unknown-symbol placeholder text, not real pairing data) slipped
-    through and got alerted.
+    """Hard gate: a token only passes when we can POSITIVELY CONFIRM it has
+    a real pool at all (any quote asset — no whitelist). Only a total lack
+    of pool/quote data from every source rejects the token
+    (no_eligible_quote_pair = True). Quote-asset pairing is no longer
+    restricted to a fixed whitelist (ETH/WETH/USDG/...) — the user found
+    real runners repeatedly getting rejected purely for being paired with
+    an asset outside that list (PECCY/AMZN, Satori/NVDA), and asked for
+    pairing to be open as long as the other quality gates (organic volume,
+    volume-5m spike, liquidity, holders, etc.) are satisfied. This still
+    breaks from the bot's usual graceful-N/A default in one way: a token
+    with NO confirmable pool data anywhere still fails closed, same as
+    before ("Bucket/ROBIN" — the "ROBIN" was just the formatter's
+    unknown-symbol placeholder text, not real pairing data).
 
     Three independent confirmation sources are tried in order, since
     Krystal Cloud is permanently out of credit (every call 402s) and can
@@ -320,10 +323,12 @@ async def _enrich_with_pool_data(
     2. DexPaprika /pools/search — reports no symbol, but each pool's
        "tokens" list does carry that side's contract ADDRESS. Matched
        against config.QUOTE_ADDRESS_SYMBOLS (e.g. USDG's known contract)
-       this confirms pairing just as validly as a symbol match, and
-       doesn't depend on Krystal at all.
-    3. GMGN's own quote_address field, same address-matching idea, as a
-       last resort for tokens DexPaprika hasn't indexed a pool for yet.
+       this resolves a friendly display symbol when recognized, but any
+       pool counts as confirmation regardless of whether the address is
+       recognized.
+    3. GMGN's own quote_address field, trusted as confirmation on its own
+       (any non-empty address), as a last resort for tokens DexPaprika
+       hasn't indexed a pool for yet.
     """
     addr = token.get("address")
     if not addr:
@@ -342,11 +347,7 @@ async def _enrich_with_pool_data(
     krystal_pools = await krystal_client.get_pools_for_token(addr)
     if krystal_pools:
         pool_count = len(krystal_pools)
-        normalized = [krystal.normalize_krystal_pool(p, addr) for p in krystal_pools]
-        confirmed = [
-            p for p in normalized
-            if p.get("quote_symbol") and p["quote_symbol"].upper() in config.ALLOWED_QUOTE_SYMBOLS
-        ]
+        confirmed = [krystal.normalize_krystal_pool(p, addr) for p in krystal_pools]
 
     dp_pools_normalized: list[dict] = []
     dp_attempted = False
@@ -361,25 +362,30 @@ async def _enrich_with_pool_data(
                     a for a in (p.get("token_addresses") or [])
                     if a and a.lower() != addr_lower
                 ]
+                # Any pool confirms the token has real liquidity; resolve a
+                # friendly display symbol when the other side's address is
+                # recognized, but don't require it to be.
                 matched_symbol = next(
                     (
                         config.QUOTE_ADDRESS_SYMBOLS[a.lower()]
                         for a in other_addrs
-                        if config.QUOTE_ADDRESS_SYMBOLS.get(a.lower(), "").upper() in config.ALLOWED_QUOTE_SYMBOLS
+                        if a.lower() in config.QUOTE_ADDRESS_SYMBOLS
                     ),
                     None,
                 )
                 if matched_symbol:
                     p["quote_symbol"] = matched_symbol
-                    confirmed.append(p)
+                confirmed.append(p)
 
     if not confirmed:
-        # GMGN's own quote_address field (e.g. the zero address = native
-        # ETH, or USDG's contract) as a last-resort confirmation source.
+        # GMGN's own quote_address field as a last-resort confirmation
+        # source — trusted on its own (any non-empty address), with a
+        # friendly symbol resolved when recognized.
         quote_address = token.get("quote_address")
-        quote_symbol = config.QUOTE_ADDRESS_SYMBOLS.get(str(quote_address).lower()) if quote_address else None
-        if quote_symbol and quote_symbol.upper() in config.ALLOWED_QUOTE_SYMBOLS:
-            token["quote_symbol"] = quote_symbol
+        if quote_address:
+            quote_symbol = config.QUOTE_ADDRESS_SYMBOLS.get(str(quote_address).lower())
+            if quote_symbol:
+                token["quote_symbol"] = quote_symbol
         else:
             _clear_pool_fields(token)
             token["no_eligible_quote_pair"] = True

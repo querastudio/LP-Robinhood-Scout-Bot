@@ -49,9 +49,12 @@ Semua threshold dikonfigurasi lewat environment variable, default di
 - ATH break (`signal_type == 7`) default sebagai bonus/highlight, bukan hard
   filter (`REQUIRE_ATH_BREAK=true` untuk mengubahnya jadi wajib).
 - **Filter pool (hard, wajib lolos)**:
-  - Pool harus dipasangkan dengan salah satu quote asset di
-    `ALLOWED_QUOTE_SYMBOLS` (default `ETH,WETH,USDG`) — token ditolak kalau
-    semua pool-nya dipasangkan dengan token lain.
+  - Pool harus ada dan terkonfirmasi (dari Krystal, DexPaprika, atau field
+    `quote_address` GMGN) — token ditolak kalau sama sekali tidak ada data
+    pool yang bisa dikonfirmasi. Quote asset-nya sendiri **bebas** (tidak
+    lagi dibatasi whitelist ETH/WETH/USDG/dst) — kualitas token
+    ditentukan oleh filter lain (volume organik, spike volume 5 menit,
+    liquidity, holders, dll), bukan oleh pasangan quote asset-nya.
   - Fee tier pool minimal `MIN_BASE_FEE_PCT` (default 2%) — token ditolak
     kalau fee tier diketahui dan di bawah ambang ini. Kalau data fee tier-nya
     sendiri tidak tersedia dari API, filter ini di-skip (bukan reject).

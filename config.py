@@ -99,22 +99,16 @@ MIN_PRICE_CHANGE_1H_REQUIRED = os.environ.get("MIN_PRICE_CHANGE_1H_REQUIRED", "f
 ALLOWED_FEE_TIERS_PCT = [0.01, 0.05, 0.3, 1.0]
 MIN_POOL_TVL = _env_float("MIN_POOL_TVL", 10_000)
 
-# Pool must be paired against one of these quote assets (case-insensitive
-# symbol match) — hard filter. Was briefly narrowed to USDG-only, then
-# widened back to ETH/WETH/USDG. Added NVDA after two independent live
-# runs (AGI Frog, then Satori — both real high-volume/high-fee runners
-# the user flagged as missed) confirmed the same launch_quote_address
-# (0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec) for NVDA pairings — this
-# is Robinhood Chain, tokenized-stock quote pairs are a real, common
-# category here, not a one-off. Override via env (comma-separated) if
-# this needs revisiting; add more tokenized-stock symbols to both this
-# list and QUOTE_ADDRESS_SYMBOLS below once their addresses are
-# confirmed the same way (never guessed — see that dict's comment).
-ALLOWED_QUOTE_SYMBOLS = [
-    s.strip().upper()
-    for s in os.environ.get("ALLOWED_QUOTE_SYMBOLS", "ETH,WETH,USDG,NVDA").split(",")
-    if s.strip()
-]
+# NOTE: pairing is no longer restricted to a quote-asset whitelist. This
+# was a hard filter (USDG-only, then ETH/WETH/USDG, then +NVDA) but real
+# runners kept getting rejected purely for being paired with an asset
+# outside the list (PECCY/AMZN, Satori/NVDA before NVDA was added) — the
+# user asked for pairing to be open, relying on the other quality gates
+# (organic volume, volume-5m spike, liquidity, holders, etc.) instead.
+# screener._enrich_with_pool_data now accepts ANY confirmed pool/quote
+# pairing; only a total lack of pool data (no_eligible_quote_pair) still
+# fails closed. QUOTE_ADDRESS_SYMBOLS below is kept purely to resolve a
+# friendly display symbol when the quote asset's address is recognized.
 # Hard filter: reject the token if its best pool's fee tier is known and
 # below this. Unknown fee tier (API didn't return one) does NOT reject —
 # same graceful-N/A rule as every other filter in this bot.

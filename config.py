@@ -100,16 +100,19 @@ ALLOWED_FEE_TIERS_PCT = [0.01, 0.05, 0.3, 1.0]
 MIN_POOL_TVL = _env_float("MIN_POOL_TVL", 10_000)
 
 # Pool must be paired against one of these quote assets (case-insensitive
-# symbol match) — hard filter. Was briefly narrowed to USDG-only, but
-# reverted back to ETH/WETH/USDG: a real high-volume candidate (PECCY,
-# paired with tokenized AMZN per GMGN) couldn't be confirmed either way
-# because DexPaprika/GeckoTerminal were unreachable/rate-limited at check
-# time, and the user asked to widen the gate again rather than risk
-# missing real pools pending manual verification. Override via env
-# (comma-separated) if this needs revisiting.
+# symbol match) — hard filter. Was briefly narrowed to USDG-only, then
+# widened back to ETH/WETH/USDG. Added NVDA after two independent live
+# runs (AGI Frog, then Satori — both real high-volume/high-fee runners
+# the user flagged as missed) confirmed the same launch_quote_address
+# (0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec) for NVDA pairings — this
+# is Robinhood Chain, tokenized-stock quote pairs are a real, common
+# category here, not a one-off. Override via env (comma-separated) if
+# this needs revisiting; add more tokenized-stock symbols to both this
+# list and QUOTE_ADDRESS_SYMBOLS below once their addresses are
+# confirmed the same way (never guessed — see that dict's comment).
 ALLOWED_QUOTE_SYMBOLS = [
     s.strip().upper()
-    for s in os.environ.get("ALLOWED_QUOTE_SYMBOLS", "ETH,WETH,USDG").split(",")
+    for s in os.environ.get("ALLOWED_QUOTE_SYMBOLS", "ETH,WETH,USDG,NVDA").split(",")
     if s.strip()
 ]
 # Hard filter: reject the token if its best pool's fee tier is known and
@@ -135,6 +138,11 @@ MIN_BASE_FEE_PCT = _env_float("MIN_BASE_FEE_PCT", 2.0)
 QUOTE_ADDRESS_SYMBOLS = {
     "0x0000000000000000000000000000000000000000": "ETH",
     "0x5fc5360d0400a0fd4f2af552add042d716f1d168": "USDG",
+    # NVDA (tokenized Nvidia stock) — confirmed twice independently from
+    # live GMGN launch_quote_address values (AGI Frog, then Satori), not
+    # guessed. Real high-volume/high-fee runners on Robinhood Chain pair
+    # against tokenized stocks like this as often as against ETH/USDG.
+    "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec": "NVDA",
 }
 for _pair in os.environ.get("QUOTE_ADDRESS_SYMBOLS_EXTRA", "").split(","):
     if "=" in _pair:

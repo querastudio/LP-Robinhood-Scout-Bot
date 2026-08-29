@@ -166,6 +166,13 @@ class GmgnClient:
         for chain_result in chain_results:
             if isinstance(chain_result, dict):
                 tokens.extend(chain_result.get("tokens") or [])
+        if DEBUG_API_RAW and tokens:
+            # Temporary diagnostic: dump every key on the first item so we
+            # can confirm whether a fee/revenue field exists here at all —
+            # the full JSON in RAW logs is truncated at 3000 chars, easily
+            # cutting off a field this deep in the object, but the key list
+            # alone is compact enough to always survive.
+            logger.info("hot_searches first item keys: %s", sorted(tokens[0].keys()))
         return tokens
 
     async def get_token_signal(self, chain: str = None, signal_type: int = 7) -> list[dict]:
@@ -175,7 +182,13 @@ class GmgnClient:
         if not data:
             return []
         items = data.get("data") if isinstance(data, dict) else data
-        return items if isinstance(items, list) else []
+        items = items if isinstance(items, list) else []
+        if DEBUG_API_RAW and items:
+            logger.info("token_signal first item keys: %s", sorted(items[0].keys()))
+            detail = items[0].get("data")
+            if isinstance(detail, dict):
+                logger.info("token_signal first item detail keys: %s", sorted(detail.keys()))
+        return items
 
     async def get_rank(self, chain: str = None, interval: str = "1h") -> list[dict]:
         chain = chain or config.GMGN_CHAIN
@@ -186,7 +199,10 @@ class GmgnClient:
         outer = data.get("data") if isinstance(data, dict) else None
         inner = outer.get("data") if isinstance(outer, dict) else outer
         items = inner.get("rank") if isinstance(inner, dict) else None
-        return items if isinstance(items, list) else []
+        items = items if isinstance(items, list) else []
+        if DEBUG_API_RAW and items:
+            logger.info("rank first item keys: %s", sorted(items[0].keys()))
+        return items
 
     async def get_token_kline(self, address: str, chain: str = None, resolution: str = "1h") -> list[dict]:
         chain = chain or config.GMGN_CHAIN

@@ -193,6 +193,14 @@ MAX_ALERTS_RUN = _env_int("MAX_ALERTS_RUN", 5)
 BATCH_SIZE = _env_int("BATCH_SIZE", 15)
 COOLDOWN_CACHE_PATH = os.environ.get("COOLDOWN_CACHE_PATH", "cooldown_cache.json")
 
+# Safety cap on how many cooldown-cleared candidates the volume-5m spike
+# check (main.py) will walk through GeckoTerminal in one run. Without a
+# cap, a run with many passing candidates (loosened filters mean this can
+# be dozens now) could take long enough to risk overlapping the next
+# 5-minute cron cycle — GeckoTerminal's free tier is 30 req/min, so even
+# 20 candidates here is a real chunk of a run's time budget.
+MAX_SPIKE_CHECK_CANDIDATES = _env_int("MAX_SPIKE_CHECK_CANDIDATES", 15)
+
 # GMGN rate limit: leaky bucket 20 req/s. Keep comfortably under.
 GMGN_MAX_REQ_PER_SEC = _env_int("GMGN_MAX_REQ_PER_SEC", 10)
 # DexPaprika free tier 429s under load. Bumped from 2 now that it's the

@@ -54,7 +54,7 @@ async def run() -> None:
     if candidates:
         gt_client = GeckoTerminalClient()
         try:
-            for token in candidates:
+            for token in candidates[: config.MAX_SPIKE_CHECK_CANDIDATES]:
                 await screener.enrich_with_geckoterminal(gt_client, token)
                 vol_5m = token.get("volume_5m")
                 if vol_5m is None or vol_5m < config.MIN_VOL_5M:

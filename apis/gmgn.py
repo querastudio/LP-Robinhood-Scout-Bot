@@ -166,13 +166,6 @@ class GmgnClient:
         for chain_result in chain_results:
             if isinstance(chain_result, dict):
                 tokens.extend(chain_result.get("tokens") or [])
-        if DEBUG_API_RAW and tokens:
-            # Temporary diagnostic: dump every key on the first item so we
-            # can confirm whether a fee/revenue field exists here at all —
-            # the full JSON in RAW logs is truncated at 3000 chars, easily
-            # cutting off a field this deep in the object, but the key list
-            # alone is compact enough to always survive.
-            logger.info("hot_searches first item keys: %s", sorted(tokens[0].keys()))
         return tokens
 
     async def get_token_signal(self, chain: str = None, signal_type: int = 7) -> list[dict]:
@@ -182,13 +175,7 @@ class GmgnClient:
         if not data:
             return []
         items = data.get("data") if isinstance(data, dict) else data
-        items = items if isinstance(items, list) else []
-        if DEBUG_API_RAW and items:
-            logger.info("token_signal first item keys: %s", sorted(items[0].keys()))
-            detail = items[0].get("data")
-            if isinstance(detail, dict):
-                logger.info("token_signal first item detail keys: %s", sorted(detail.keys()))
-        return items
+        return items if isinstance(items, list) else []
 
     async def get_rank(self, chain: str = None, interval: str = "1h") -> list[dict]:
         chain = chain or config.GMGN_CHAIN
@@ -199,10 +186,7 @@ class GmgnClient:
         outer = data.get("data") if isinstance(data, dict) else None
         inner = outer.get("data") if isinstance(outer, dict) else outer
         items = inner.get("rank") if isinstance(inner, dict) else None
-        items = items if isinstance(items, list) else []
-        if DEBUG_API_RAW and items:
-            logger.info("rank first item keys: %s", sorted(items[0].keys()))
-        return items
+        return items if isinstance(items, list) else []
 
     async def get_token_kline(self, address: str, chain: str = None, resolution: str = "1h") -> list[dict]:
         chain = chain or config.GMGN_CHAIN
@@ -289,6 +273,15 @@ def normalize_signal_item(item: dict) -> dict:
         "quote_address": detail.get("quote_address"),
         "is_wash_trading": _truthy(detail.get("is_wash_trading")),
         "rug_ratio": detail.get("rug_ratio"),
+        # Confirmed present in a live raw response (matches the "Total
+        # Fees" figure shown on GMGN's own token page, in native-token
+        # units e.g. ETH) — but only here, in token_signal's detail
+        # object. hot_searches/rank (the other two candidate sources)
+        # don't expose any fee field at all, confirmed by dumping their
+        # full key lists live — so total_fees stays N/A for tokens that
+        # only ever showed up via those two, not a bug, a real GMGN
+        # data-availability gap for that source.
+        "total_fees": detail.get("total_fee"),
         "_raw": item,
     }
 

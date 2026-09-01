@@ -194,6 +194,9 @@ COOLDOWN_HOURS = _env_float("COOLDOWN_HOURS", 6)
 MAX_ALERTS_RUN = _env_int("MAX_ALERTS_RUN", 5)
 BATCH_SIZE = _env_int("BATCH_SIZE", 15)
 COOLDOWN_CACHE_PATH = os.environ.get("COOLDOWN_CACHE_PATH", "cooldown_cache.json")
+# Pause/resume state (see utils/state.py) + last processed Telegram
+# update_id, persisted across runs the same way as the cooldown cache.
+BOT_STATE_PATH = os.environ.get("BOT_STATE_PATH", "bot_state.json")
 
 # Safety cap on how many cooldown-cleared candidates the volume-5m spike
 # check (main.py) will walk through GeckoTerminal in one run. Without a

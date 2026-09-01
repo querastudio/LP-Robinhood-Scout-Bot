@@ -40,6 +40,22 @@ Semua filter yang datanya tidak tersedia dari API di-skip secara graceful
 (tampil "N/A" di notifikasi), bot tidak akan crash atau menolak semua token
 karena satu field hilang.
 
+## Pause / Resume (hemat API call)
+
+Kirim command ini lewat chat Telegram yang sama dengan `TELEGRAM_CHAT_ID`:
+
+- `/pause` (atau `/stop`) — matikan scan. Selama paused, tiap run cuma
+  melakukan satu panggilan `getUpdates` ke Telegram (buat dengar
+  `/resume`) — **tidak** memanggil GMGN, DexPaprika, Krystal, GeckoTerminal,
+  atau Alchemy RPC sama sekali, jadi tidak boros quota/rate-limit.
+- `/resume` (atau `/start`) — nyalakan lagi, scan jalan normal tiap 5 menit.
+- `/status` — cek status saat ini (Running/Paused).
+
+Status paused/resume disimpan di `bot_state.json`, ikut ter-cache antar run
+lewat `actions/cache` (sama seperti `cooldown_cache.json`). Command diproses
+di awal tiap run — bot cuma memproses command yang dikirim dari chat id yang
+sama dengan `TELEGRAM_CHAT_ID`, command dari chat lain diabaikan.
+
 ## Threshold / filter
 
 Semua threshold dikonfigurasi lewat environment variable, default di

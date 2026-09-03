@@ -115,9 +115,26 @@ def normalize_pool(pool: dict, token_address: str) -> dict:
     except (KeyError, TypeError):
         dex_id = None
 
+    # attrs.name is GeckoTerminal's own "BASE / QUOTE" label (using ticker
+    # symbols, not addresses) — the only source here that can name a quote
+    # asset outside our small QUOTE_ADDRESS_SYMBOLS map (e.g. a DEX like
+    # "bankr-robinhood" pairing against something we haven't hardcoded).
+    # Order follows base_token/quote_token above, so use whichever side
+    # isn't our own token.
+    quote_symbol = None
+    name = attrs.get("name")
+    if isinstance(name, str) and "/" in name:
+        parts = [p.strip() for p in name.split("/", 1)]
+        if len(parts) == 2 and all(parts):
+            if base_addr and base_addr.lower() == token_lower:
+                quote_symbol = parts[1]
+            elif quote_addr and quote_addr.lower() == token_lower:
+                quote_symbol = parts[0]
+
     return {
         "pool_address": pool.get("id"),
         "dex": dex_id,
+        "quote_symbol": quote_symbol,
         "tvl_usd": tvl_usd,
         "volume_24h": _to_float(volume_usd.get("h24")),
         # Real last-5-minute volume — confirmed present in a live raw

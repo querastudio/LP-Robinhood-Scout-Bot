@@ -252,6 +252,8 @@ def _apply_geckoterminal_enrichment(token: dict, best: dict) -> None:
     left N/A."""
     if token.get("dex") is None and best.get("dex"):
         token["dex"] = best["dex"]
+    if token.get("quote_symbol") is None and best.get("quote_symbol"):
+        token["quote_symbol"] = best["quote_symbol"]
     if token.get("pool_tvl") is None and best.get("tvl_usd") is not None:
         token["pool_tvl"] = best["tvl_usd"]
     if token.get("liquidity") is None and best.get("tvl_usd") is not None:

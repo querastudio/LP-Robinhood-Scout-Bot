@@ -103,6 +103,17 @@ def _fmt_spike_ratio(vol_5m: Optional[float], baseline: Optional[float]) -> str:
     return f"{ratio:.1f}x avg {mark}"
 
 
+def _fmt_sibling_line(sibling_count: Optional[int], sibling_ratio: Optional[float]) -> str:
+    """Layer 2 sibling-selection result: how many other fee-tier pools this
+    token had, and how this pool's volume compared to the busiest one."""
+    if sibling_count is None:
+        return "N/A"
+    if sibling_count == 0:
+        return "Tidak ada sibling pool lain"
+    ratio_str = f"{sibling_ratio * 100:.1f}%" if sibling_ratio is not None else "N/A"
+    return f"Menang atas {sibling_count} sibling pool (vol ratio {ratio_str})"
+
+
 def _mark(value: Optional[Any], passes: Optional[bool]) -> str:
     """✅ / ❌ / ⚪ badge. `value` is the raw metric (None -> unknown/N/A
     regardless of `passes`); `passes` is the pre-computed pass/fail bool."""
@@ -168,6 +179,9 @@ def build_alert_message(token: dict) -> str:
 
     fee_tier_ok = fee_tier_pct >= config.MIN_BASE_FEE_PCT if fee_tier_pct is not None else None
 
+    sibling_line = _fmt_sibling_line(token.get("pool_sibling_count"), token.get("pool_sibling_volume_ratio"))
+    layer3_tags = token.get("layer3_tags") or {}
+
     price = token.get("price")
     vol_1h = token.get("volume_1h")
     liquidity = token.get("liquidity")
@@ -213,6 +227,7 @@ def build_alert_message(token: dict) -> str:
         f"Avg Fees/Min: {fmt_usd(token.get('avg_fees_per_min'))}",
         f"Avg Vol/Min : {fmt_usd(token.get('avg_vol_per_min'))}",
         f"Pool Count  : {fmt_int(pool_count)} {_mark(pool_count, pool_count is not None and pool_count <= config.MAX_POOL_COUNT)}",
+        f"Sibling Win : {sibling_line}",
         "━━━━━━━━━━━━━━━━━━━━━",
         "💸 FEE STRUCTURE",
         "━━━━━━━━━━━━━━━━━━━━━",
@@ -225,6 +240,15 @@ def build_alert_message(token: dict) -> str:
         "━━━━━━━━━━━━━━━━━━━━━",
         links_str,
         f"🏆 ATH Break: {ath_line}",
+    ]
+    # Layer 3: purely informational tags, only shown when the underlying
+    # data was actually available (see screener.enrich_layer3_tags) — never
+    # a fixed line with "N/A", since these are highlights, not filters.
+    if layer3_tags.get("momentum_up"):
+        lines.append(f"🔥 Momentum naik ({layer3_tags.get('momentum_ratio', 0):.1f}x avg 1h)")
+    if "fee_vs_drawdown_ratio" in layer3_tags:
+        lines.append(f"💡 Fee/Drawdown ratio: {layer3_tags['fee_vs_drawdown_ratio']:.2f}")
+    lines += [
         f"🔥 Hot Search: {'#' + str(token['hot_search_rank']) if token.get('hot_search_rank') is not None else 'N/A'}",
         f"⏰ {now_wib_str()}",
         "⚠️ DYOR — bukan financial advice",

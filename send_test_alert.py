@@ -44,6 +44,15 @@ SAMPLE_TOKEN = {
     "vol_tvl_24h_pct": 214.0,
     "avg_fees_per_min": 6.6,
     "avg_vol_per_min": 119.2,
+    # Layer 2 sibling selection (CEREBRO criteria) — this pool beat 1 other
+    # fee-tier sibling that existed for the same token but was "jomplang"
+    # (too little volume relative to this one) and got skipped.
+    "pool_layer1_passed": True,
+    "pool_sibling_count": 1,
+    "pool_sibling_volume_ratio": 1.0,
+    # Layer 3 — informational-only tags, computed by screener.enrich_layer3_tags
+    # in the real flow; hardcoded here just to preview the formatting.
+    "layer3_tags": {"momentum_up": True, "momentum_ratio": 2.4},
 }
 
 

@@ -111,6 +111,7 @@ async def run() -> None:
 
     sent_count = 0
     for token in to_alert:
+        token["layer3_tags"] = screener.enrich_layer3_tags(token)
         message = formatter.build_alert_message(token)
         ok = await telegram.send_message(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID, message)
         if ok:

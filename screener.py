@@ -164,9 +164,14 @@ def _filter_reasons(token: dict) -> list[str]:
     if token.get("no_eligible_quote_pair") is True:
         reasons.append("no_eligible_quote_pair")
 
-    fee_tier_pct = token.get("fee_tier_pct")
-    if fee_tier_pct is not None and fee_tier_pct < config.MIN_BASE_FEE_PCT:
-        reasons.append("fee_tier_pct")
+    # Pool data exists (pairing confirmed) but none of the token's sibling
+    # pools cleared the CEREBRO-criteria Layer 1 gate (TVL/Vol-TVL/Fee-TVL/
+    # age/base-fee) — see select_best_sibling / filter_pool_layer1. Note
+    # base fee itself is no longer separately re-checked here: the winning
+    # pool's fee_tier_pct is already guaranteed >= MIN_BASE_FEE_PCT (or
+    # unknown) by Layer 1, so a standalone re-check here would be dead code.
+    if token.get("pool_layer1_passed") is False:
+        reasons.append("pool_quality")
 
     if config.MIN_FEES_TVL_24H_REQUIRED:
         fees_tvl_pct = token.get("fees_tvl_24h_pct")
@@ -210,27 +215,171 @@ def _score(token: dict) -> float:
     return score
 
 
+def _pool_age_days(pool: dict) -> Optional[float]:
+    """created_at may be unix seconds or milliseconds (sources differ) —
+    None when the source doesn't expose a pool-creation timestamp at all
+    (Krystal never does; DexPaprika and GeckoTerminal both do)."""
+    created_at = pool.get("created_at")
+    if created_at is None:
+        return None
+    try:
+        created_ts = float(created_at)
+    except (TypeError, ValueError):
+        return None
+    if created_ts > 10**12:  # milliseconds -> seconds
+        created_ts /= 1000
+    return max(0.0, (time.time() - created_ts) / SECONDS_PER_DAY)
+
+
+def filter_pool_layer1(pool: dict) -> tuple[bool, Optional[str]]:
+    """Per-pool hard filter (CEREBRO criteria): TVL, Vol/TVL, Fee/TVL, age,
+    and base fee tier must ALL clear their minimums at once. Graceful-skip
+    on each individual check when that pool's source didn't report the
+    field — see config.py's comment on this gate for why. Returns
+    (passed, first_failure_reason_or_None); also stashes the computed
+    ratios on the pool dict under "_layer1_metrics" for display/reuse.
+    """
+    tvl = pool.get("tvl_usd")
+    volume_24h = pool.get("volume_24h")
+    fees_24h = pool.get("fees_24h_usd")
+    fee_tier = pool.get("fee_tier_pct")
+    age_days = _pool_age_days(pool)
+
+    vol_tvl_ratio = (volume_24h / tvl) if (volume_24h is not None and tvl) else None
+    fee_tvl_pct = (fees_24h / tvl * 100) if (fees_24h is not None and tvl) else None
+
+    pool["_layer1_metrics"] = {
+        "pool_age_days": age_days,
+        "vol_tvl_ratio": vol_tvl_ratio,
+        "fee_tvl_pct": fee_tvl_pct,
+    }
+
+    reasons: list[str] = []
+    if age_days is not None and age_days < config.MIN_POOL_AGE_DAYS:
+        reasons.append("pool_age")
+    if tvl is not None and tvl < config.MIN_POOL_TVL:
+        reasons.append("pool_tvl")
+    if vol_tvl_ratio is not None and vol_tvl_ratio < config.MIN_VOL_TVL_RATIO:
+        reasons.append("vol_tvl_ratio")
+    if fee_tvl_pct is not None and fee_tvl_pct < config.MIN_FEE_TVL_PCT:
+        reasons.append("fee_tvl_pct")
+    if fee_tier is not None and fee_tier < config.MIN_BASE_FEE_PCT:
+        reasons.append("base_fee")
+
+    return (not reasons, reasons[0] if reasons else None)
+
+
+def select_best_sibling(pools: list[dict]) -> Optional[dict]:
+    """Layer 2: given every sibling pool for one token (same token,
+    different fee tiers — including ones that FAIL Layer 1, needed as the
+    volume yardstick), pick the single best one to alert on, so a token
+    with multiple pools never spams one notification per sibling.
+
+    1. max_volume_sibling = highest 24h volume among ALL siblings (pass or
+       fail Layer 1) — the "is anyone actually trading this" yardstick.
+    2. Run Layer 1 on every sibling; only Layer-1 passers are candidates.
+    3. Jomplang check: a candidate whose volume_ratio (vs max_volume) is
+       below config.SIBLING_VOLUME_RATIO_THRESHOLD is dropped from the
+       priority list — real case: CEREBRO's 2.08% tier ($11K, ratio ~1.5%)
+       vs its 2.1% tier ($707.8K) — the thin-volume tier must lose despite
+       clearing Layer 1 on its own.
+    4. Among the non-jomplang candidates, pick highest base fee, tie-break
+       by volume. If ALL candidates were jomplang, fall back to the
+       highest-volume Layer-1 passer regardless of fee tier.
+    """
+    if not pools:
+        return None
+
+    volumes = [p.get("volume_24h") for p in pools if p.get("volume_24h") is not None]
+    max_volume = max(volumes) if volumes else None
+
+    candidates = []
+    for p in pools:
+        passed, reason = filter_pool_layer1(p)
+        p["_layer1_pass"] = passed
+        p["_layer1_fail_reason"] = reason
+        if passed:
+            candidates.append(p)
+    if not candidates:
+        return None
+
+    for p in candidates:
+        vol = p.get("volume_24h")
+        p["_sibling_volume_ratio"] = (vol / max_volume) if (vol is not None and max_volume) else None
+
+    non_jomplang = [
+        p for p in candidates
+        if p.get("_sibling_volume_ratio") is None
+        or p["_sibling_volume_ratio"] >= config.SIBLING_VOLUME_RATIO_THRESHOLD
+    ]
+
+    if non_jomplang:
+        pool_list = sorted(
+            non_jomplang,
+            key=lambda p: (
+                p.get("fee_tier_pct") if p.get("fee_tier_pct") is not None else -1,
+                p.get("volume_24h") if p.get("volume_24h") is not None else -1,
+            ),
+            reverse=True,
+        )
+    else:
+        # All Layer-1-passing candidates were jomplang against the busiest
+        # sibling — fall back to volume alone rather than fee tier, since
+        # fee tier stopped being a meaningful signal here.
+        pool_list = sorted(
+            candidates,
+            key=lambda p: p.get("volume_24h") if p.get("volume_24h") is not None else -1,
+            reverse=True,
+        )
+
+    winner = pool_list[0]
+    winner["_sibling_count"] = len(pools) - 1
+    return winner
+
+
+def enrich_layer3_tags(token: dict) -> dict:
+    """Layer 3: purely informational tags for the alert body — never gate
+    pass/fail. Empty dict when the underlying data isn't available (e.g.
+    price_change_24h isn't exposed by any API this bot integrates with
+    today, so "fee vs drawdown" never fires yet — see README Phase 2
+    backlog rather than treating that as a bug)."""
+    tags: dict = {}
+
+    vol_1h = token.get("volume_1h")
+    vol_24h = token.get("vol_24h_usd")
+    if vol_1h is not None and vol_24h:
+        avg_1h = vol_24h / 24
+        if avg_1h > 0:
+            ratio = vol_1h / avg_1h
+            if ratio > config.MOMENTUM_RATIO_THRESHOLD:
+                tags["momentum_up"] = True
+                tags["momentum_ratio"] = ratio
+
+    price_change_24h = token.get("price_change_24h")
+    fee_tvl_pct = token.get("fees_tvl_24h_pct")
+    if price_change_24h is not None and price_change_24h < 0 and fee_tvl_pct is not None and fee_tvl_pct > 0:
+        drawdown = abs(price_change_24h)
+        if drawdown > 0:
+            tags["fee_vs_drawdown_ratio"] = fee_tvl_pct / drawdown
+
+    return tags
+
+
 def _apply_best_pool(token: dict, best: dict) -> None:
-    token.setdefault("dex", best.get("dex"))
-    token.setdefault("pool_tvl", best.get("tvl_usd"))
-    token.setdefault("fee_tier_pct", best.get("fee_tier_pct"))
-    token.setdefault("fees_24h_usd", best.get("fees_24h_usd"))
-    token.setdefault("vol_24h_usd", best.get("volume_24h") or token.get("volume"))
-    token.setdefault("quote_symbol", best.get("quote_symbol"))
+    """Applies the Layer-2 sibling-selection winner to the token. Called
+    exactly once per token (the single chosen pool), so plain assignment
+    is fine — no more accumulating partial data across multiple calls."""
+    token["dex"] = best.get("dex")
+    token["pool_tvl"] = best.get("tvl_usd")
+    token["fee_tier_pct"] = best.get("fee_tier_pct")
+    token["fees_24h_usd"] = best.get("fees_24h_usd")
+    token["vol_24h_usd"] = best.get("volume_24h") or token.get("volume")
+    token["quote_symbol"] = best.get("quote_symbol")
     if token.get("liquidity") is None and best.get("tvl_usd") is not None:
         token["liquidity"] = best.get("tvl_usd")
-
-    created_at = best.get("created_at")
-    if created_at is not None:
-        try:
-            created_ts = float(created_at)
-            if created_ts > 10**12:  # milliseconds -> seconds
-                created_ts /= 1000
-            token["pool_age_days"] = max(0.0, (time.time() - created_ts) / SECONDS_PER_DAY)
-        except (TypeError, ValueError):
-            token.setdefault("pool_age_days", None)
-    else:
-        token.setdefault("pool_age_days", None)
+    token["pool_age_days"] = _pool_age_days(best)
+    token["pool_sibling_count"] = best.get("_sibling_count")
+    token["pool_sibling_volume_ratio"] = best.get("_sibling_volume_ratio")
 
 
 def _clear_pool_fields(token: dict) -> None:
@@ -241,6 +390,8 @@ def _clear_pool_fields(token: dict) -> None:
     token.setdefault("fees_24h_usd", None)
     token.setdefault("vol_24h_usd", None)
     token.setdefault("quote_symbol", None)
+    token.setdefault("pool_sibling_count", None)
+    token.setdefault("pool_sibling_volume_ratio", None)
 
 
 def _apply_geckoterminal_enrichment(token: dict, best: dict) -> None:
@@ -270,12 +421,10 @@ def _apply_geckoterminal_enrichment(token: dict, best: dict) -> None:
     # rather than just checking an absolute dollar figure.
     vol_1h_pool = best.get("volume_1h_pool")
     token["volume_5m_baseline"] = (vol_1h_pool / 12) if vol_1h_pool else None
-    if token.get("pool_age_days") is None and best.get("created_at") is not None:
-        try:
-            created_ts = float(best["created_at"])
-            token["pool_age_days"] = max(0.0, (time.time() - created_ts) / SECONDS_PER_DAY)
-        except (TypeError, ValueError):
-            pass
+    if token.get("pool_age_days") is None:
+        age = _pool_age_days(best)
+        if age is not None:
+            token["pool_age_days"] = age
     _compute_pool_ratios(token)
 
 
@@ -301,19 +450,29 @@ async def _enrich_with_pool_data(
     dp_client: chain_data.DexPaprikaClient,
     token: dict,
 ) -> None:
-    """Hard gate: a token only passes when we can POSITIVELY CONFIRM it has
-    a real pool at all (any quote asset — no whitelist). Only a total lack
-    of pool/quote data from every source rejects the token
-    (no_eligible_quote_pair = True). Quote-asset pairing is no longer
-    restricted to a fixed whitelist (ETH/WETH/USDG/...) — the user found
-    real runners repeatedly getting rejected purely for being paired with
-    an asset outside that list (PECCY/AMZN, Satori/NVDA), and asked for
-    pairing to be open as long as the other quality gates (organic volume,
-    volume-5m spike, liquidity, holders, etc.) are satisfied. This still
-    breaks from the bot's usual graceful-N/A default in one way: a token
-    with NO confirmable pool data anywhere still fails closed, same as
-    before ("Bucket/ROBIN" — the "ROBIN" was just the formatter's
-    unknown-symbol placeholder text, not real pairing data).
+    """Two-layer pool gate, run per token:
+
+    Gate A — pairing confirmation (fail-closed): a token only passes when
+    we can POSITIVELY CONFIRM it has a real pool at all (any quote asset —
+    no whitelist). Only a total lack of pool/quote data from every source
+    rejects the token (no_eligible_quote_pair = True). Quote-asset pairing
+    is not restricted to a fixed whitelist (ETH/WETH/USDG/...) — the user
+    found real runners repeatedly getting rejected purely for being paired
+    with an asset outside that list (PECCY/AMZN, Satori/NVDA).
+
+    Gate B — pool quality (CEREBRO criteria, fail-closed once pairing is
+    confirmed): among all of the token's sibling pools (same token,
+    different fee tiers), screener.select_best_sibling runs the Layer 1
+    per-pool hard filter (TVL/Vol-TVL/Fee-TVL/age/base-fee — see
+    filter_pool_layer1) plus the Layer 2 jomplang/sibling-selection
+    algorithm, and picks ONE winning pool. If none of the token's pools
+    clear Layer 1, the token is rejected as pool_layer1_passed = False —
+    distinct from no_eligible_quote_pair, since pool data DOES exist here,
+    it's just not good enough. This still breaks from the bot's usual
+    graceful-N/A default in one way: a token with NO confirmable pool data
+    anywhere still fails closed on Gate A, same as before ("Bucket/ROBIN" —
+    the "ROBIN" was just the formatter's unknown-symbol placeholder text,
+    not real pairing data).
 
     Three independent confirmation sources are tried in order, since
     Krystal Cloud is permanently out of credit (every call 402s) and can
@@ -338,7 +497,7 @@ async def _enrich_with_pool_data(
         return
     addr_lower = addr.lower()
 
-    confirmed: list[dict] = []
+    all_pools: list[dict] = []
     # Best-effort "pool competition" count: how many pools any single
     # source found for this token, regardless of which one ended up
     # confirming the quote pairing. Not deduped across sources (Krystal and
@@ -349,11 +508,11 @@ async def _enrich_with_pool_data(
     krystal_pools = await krystal_client.get_pools_for_token(addr)
     if krystal_pools:
         pool_count = len(krystal_pools)
-        confirmed = [krystal.normalize_krystal_pool(p, addr) for p in krystal_pools]
+        all_pools = [krystal.normalize_krystal_pool(p, addr) for p in krystal_pools]
 
     dp_pools_normalized: list[dict] = []
     dp_attempted = False
-    if not confirmed:
+    if not all_pools:
         dp_pools = await dp_client.get_token_pools(addr)
         dp_attempted = True
         if dp_pools:
@@ -377,43 +536,57 @@ async def _enrich_with_pool_data(
                 )
                 if matched_symbol:
                     p["quote_symbol"] = matched_symbol
-                confirmed.append(p)
+            all_pools = dp_pools_normalized
 
-    if not confirmed:
+    if not all_pools:
         # GMGN's own quote_address field as a last-resort confirmation
         # source — trusted on its own (any non-empty address), with a
-        # friendly symbol resolved when recognized.
+        # friendly symbol resolved when recognized. No per-pool metrics
+        # come with it, so this pseudo-pool trivially clears Layer 1 (there
+        # is nothing to fail) and always wins Layer 2 as the only sibling —
+        # same graceful-skip philosophy as everywhere else: missing data
+        # is never treated as bad data.
         quote_address = token.get("quote_address")
         if quote_address:
-            quote_symbol = config.QUOTE_ADDRESS_SYMBOLS.get(str(quote_address).lower())
-            if quote_symbol:
-                token["quote_symbol"] = quote_symbol
+            all_pools = [{
+                "dex": None, "tvl_usd": None, "volume_24h": None,
+                "fees_24h_usd": None, "fee_tier_pct": None, "created_at": None,
+                "quote_symbol": config.QUOTE_ADDRESS_SYMBOLS.get(str(quote_address).lower()),
+            }]
         else:
             _clear_pool_fields(token)
             token["no_eligible_quote_pair"] = True
+            token["pool_layer1_passed"] = None
+            token["pool_count"] = pool_count
             _compute_pool_ratios(token)
             return
-    else:
-        confirmed.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
-        _apply_best_pool(token, confirmed[0])
 
-    # Pairing is confirmed at this point. If we haven't already fetched
-    # DexPaprika pools above (Krystal alone confirmed it) and still lack
-    # TVL/fee numbers, fetch them now purely to fill in metrics — DexPaprika
-    # is never the sole basis for the pairing gate itself when reached this
-    # way, since pairing was already confirmed via Krystal above.
-    if token.get("pool_tvl") is None:
-        if not dp_pools_normalized and not dp_attempted:
-            dp_pools = await dp_client.get_token_pools(addr)
-            if dp_pools:
-                pool_count = max(pool_count or 0, len(dp_pools))
-                dp_pools_normalized = [chain_data.normalize_pool(p) for p in dp_pools]
-        if dp_pools_normalized:
-            dp_pools_normalized.sort(key=lambda p: p.get("tvl_usd") or 0, reverse=True)
-            _apply_best_pool(token, dp_pools_normalized[0])
+    # Pairing is confirmed at this point (all_pools is non-empty). If Krystal
+    # confirmed it but none of its pools carry a TVL figure (seen on very
+    # fresh pairs), also pull DexPaprika's pools into the comparison set —
+    # more sibling data only helps Layer 2's pick, never hurts it.
+    if not dp_pools_normalized and not dp_attempted and not any(p.get("tvl_usd") is not None for p in all_pools):
+        dp_pools = await dp_client.get_token_pools(addr)
+        if dp_pools:
+            pool_count = max(pool_count or 0, len(dp_pools))
+            all_pools.extend(chain_data.normalize_pool(p) for p in dp_pools)
 
     token["pool_count"] = pool_count
+    token["no_eligible_quote_pair"] = False
 
+    winner = select_best_sibling(all_pools)
+    if winner is None:
+        # Pairing IS confirmed (all_pools is non-empty) but no single pool
+        # clears the CEREBRO-style Layer 1 bar — a distinct rejection from
+        # no_eligible_quote_pair (that one means "no pool data at all";
+        # this one means "pool data exists, it's just not good enough").
+        _clear_pool_fields(token)
+        token["pool_layer1_passed"] = False
+        _compute_pool_ratios(token)
+        return
+
+    token["pool_layer1_passed"] = True
+    _apply_best_pool(token, winner)
     _compute_pool_ratios(token)
 
 

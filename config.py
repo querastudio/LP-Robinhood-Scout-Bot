@@ -97,6 +97,9 @@ MIN_PRICE_CHANGE_1H_REQUIRED = os.environ.get("MIN_PRICE_CHANGE_1H_REQUIRED", "f
 # --- Layer 3: Pool Structure (Uniswap-specific) ---
 # Uniswap V3 standard fee tiers in %: 0.01, 0.05, 0.3, 1.0. V4 hooks can be custom.
 ALLOWED_FEE_TIERS_PCT = [0.01, 0.05, 0.3, 1.0]
+# Per-pool TVL floor — was defined but never actually wired into a filter
+# (dead config); now enforced per-pool in screener.filter_pool_layer1 as
+# part of the CEREBRO-criteria pool quality gate below.
 MIN_POOL_TVL = _env_float("MIN_POOL_TVL", 10_000)
 
 # NOTE: pairing is no longer restricted to a quote-asset whitelist. This
@@ -182,6 +185,35 @@ MIN_FEES_TVL_24H_REQUIRED = os.environ.get("MIN_FEES_TVL_24H_REQUIRED", "false")
 # hard gate instead.
 MIN_VOL_TVL_24H_PCT = _env_float("MIN_VOL_TVL_24H_PCT", 5)
 MIN_VOL_TVL_24H_REQUIRED = os.environ.get("MIN_VOL_TVL_24H_REQUIRED", "false").lower() == "true"
+
+# --- Layer: Pool-level quality gate (CEREBRO criteria) ---
+# Per-pool hard filter (screener.filter_pool_layer1) applied to EVERY
+# individual pool before Layer 2 picks a winner among sibling pools of the
+# same token (different fee tiers). Thresholds seeded from the CEREBRO-USDG
+# case study (a verified genuinely-profitable pool: TVL ~$100K, Vol/TVL
+# ~7x, Fee/TVL ~14-15%/day, base fee 2%, age 13 days). Same graceful-skip
+# rule as everywhere else in this bot: a pool missing one of these fields
+# (e.g. Krystal never exposes pool creation timestamp — see apis/krystal.py)
+# skips THAT check for THAT pool rather than rejecting it; only a KNOWN
+# value below threshold fails a check. Punishing missing data as if it
+# were bad data caused real false rejections before (see the pool_count /
+# MIN_VOL_TVL_24H_REQUIRED history above) — don't repeat that mistake here.
+MIN_POOL_AGE_DAYS = _env_float("MIN_POOL_AGE_DAYS", 7)
+MIN_VOL_TVL_RATIO = _env_float("MIN_VOL_TVL_RATIO", 2)
+MIN_FEE_TVL_PCT = _env_float("MIN_FEE_TVL_PCT", 10)
+# Layer 2 (sibling selection): among a token's sibling pools (same token,
+# different fee tiers), a candidate whose 24h volume is below this fraction
+# of the token's single busiest sibling (even one that failed Layer 1 —
+# it's only used as the volume yardstick) is "jomplang" (lopsided) and
+# dropped from the priority list. Real case: CEREBRO's 2.08% fee-tier pool
+# ($11K volume) vs its 2.1% tier ($707.8K volume, ratio ~1.5%) — the 2.08%
+# tier must never win on a technicality when almost nobody actually trades
+# through it. Missing volume data is never treated as jomplang.
+SIBLING_VOLUME_RATIO_THRESHOLD = _env_float("SIBLING_VOLUME_RATIO_THRESHOLD", 0.5)
+
+# --- Layer 3: informational-only tags (never gate pass/fail) ---
+# "Momentum naik" tag: volume_1h vs the token's own 24h-average hourly rate.
+MOMENTUM_RATIO_THRESHOLD = _env_float("MOMENTUM_RATIO_THRESHOLD", 1.5)
 
 # Ownership/contract safety check via Alchemy RPC (owner() call). Bonus/
 # highlight by default since not every ERC20 exposes owner()/renounced

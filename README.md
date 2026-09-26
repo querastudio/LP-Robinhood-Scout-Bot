@@ -64,16 +64,72 @@ Semua threshold dikonfigurasi lewat environment variable, default di
   total fees, hot search visiting count.
 - ATH break (`signal_type == 7`) default sebagai bonus/highlight, bukan hard
   filter (`REQUIRE_ATH_BREAK=true` untuk mengubahnya jadi wajib).
-- **Filter pool (hard, wajib lolos)**:
+- **Filter pool — Gate A, pairing (hard, wajib lolos)**:
   - Pool harus ada dan terkonfirmasi (dari Krystal, DexPaprika, atau field
-    `quote_address` GMGN) — token ditolak kalau sama sekali tidak ada data
-    pool yang bisa dikonfirmasi. Quote asset-nya sendiri **bebas** (tidak
-    lagi dibatasi whitelist ETH/WETH/USDG/dst) — kualitas token
-    ditentukan oleh filter lain (volume organik, spike volume 5 menit,
-    liquidity, holders, dll), bukan oleh pasangan quote asset-nya.
-  - Fee tier pool minimal `MIN_BASE_FEE_PCT` (default 2%) — token ditolak
-    kalau fee tier diketahui dan di bawah ambang ini. Kalau data fee tier-nya
-    sendiri tidak tersedia dari API, filter ini di-skip (bukan reject).
+    `quote_address` GMGN) — token ditolak (`no_eligible_quote_pair`) kalau
+    sama sekali tidak ada data pool yang bisa dikonfirmasi. Quote asset-nya
+    sendiri **bebas** (tidak lagi dibatasi whitelist ETH/WETH/USDG/dst) —
+    kualitas token ditentukan oleh Gate B di bawah plus filter lain (volume
+    organik, spike volume 5 menit, liquidity, holders, dll).
+
+- **Filter pool — Gate B, kualitas pool (hard, kriteria CEREBRO)**: begitu
+  pairing terkonfirmasi, `screener.select_best_sibling` mengumpulkan SEMUA
+  sibling pool token itu (fee tier berbeda-beda) dan menjalankan 2 layer:
+
+  **Layer 1** — hard filter per-pool (`screener.filter_pool_layer1`), tiap
+  pool harus lolos semua sekaligus:
+
+  | Metrik | Minimum default | Env var |
+  |---|---|---|
+  | Umur pool | ≥ 7 hari | `MIN_POOL_AGE_DAYS` |
+  | TVL pool | ≥ $10.000 | `MIN_POOL_TVL` |
+  | Volume 24h / TVL | ≥ 2x | `MIN_VOL_TVL_RATIO` |
+  | Fee 24h / TVL | ≥ 10%/hari | `MIN_FEE_TVL_PCT` |
+  | Base fee tier | ≥ 2% | `MIN_BASE_FEE_PCT` (sudah ada sebelumnya) |
+
+  Sama seperti filter lain di bot ini: field yang datanya tidak tersedia
+  dari API manapun (mis. Krystal tidak pernah punya timestamp umur pool)
+  **di-skip untuk pool itu**, bukan me-reject-nya — data hilang tidak
+  diperlakukan sebagai data buruk.
+
+  **Layer 2** — seleksi antar sibling pool: kalau token punya ≥2 pool yang
+  lolos Layer 1, bot memilih SATU pemenang (bukan mengirim notif untuk
+  semua), lewat "jomplang check" — pool dengan volume jauh di bawah
+  sibling ter-ramai token itu (rasio < `SIBLING_VOLUME_RATIO_THRESHOLD`,
+  default 0.5) di-skip dari prioritas, lalu di antara sisanya dipilih base
+  fee tertinggi (tie-break volume tertinggi); kalau semua kandidat
+  jomplang, fallback ke volume tertinggi. Token ditolak (`pool_quality`)
+  kalau tidak ada satu pun sibling pool yang lolos Layer 1 — berbeda dari
+  `no_eligible_quote_pair` (itu berarti tidak ada data pool sama sekali;
+  ini berarti data pool ADA tapi tidak cukup bagus).
+
+  Hasil seleksi ditampilkan di notifikasi sebagai baris "Sibling Win".
+
+- **Layer 3 — tag informational (tidak menggagalkan pool)**: ditampilkan di
+  notifikasi kalau datanya ada, tidak pernah jadi alasan reject.
+  - 🔥 **Momentum naik** — volume 1 jam dibanding rata-rata volume 24 jam
+    (per jam); tampil kalau rasionya di atas `MOMENTUM_RATIO_THRESHOLD`
+    (default 1.5x).
+  - 💡 **Fee vs Drawdown** — rasio Fee/TVL dibanding price drawdown 24 jam.
+    **Belum aktif**: tidak ada API yang terintegrasi di bot ini (GMGN,
+    Krystal, DexPaprika, Alchemy) yang menyediakan `price_change_24h` —
+    lihat "Phase 2 backlog" di bawah.
+
+## Phase 2 backlog
+
+Item-item ini butuh sumber data baru yang belum ada integrasinya di bot ini
+— sengaja tidak diblokir dari rilis Phase 1 (overhaul filter pool CEREBRO):
+
+- **Fee/active-liquidity band** — data konsentrasi liquidity Uniswap V3
+  per tick range, perlu subgraph atau API khusus.
+- **Win rate historis LP di pool tsb** — perlu indexer/analytics pihak
+  ketiga yang melacak PnL wallet per pool, tidak disediakan GMGN/Krystal/
+  DexPaprika/Alchemy.
+- **Status smart-money address** (masih hold atau sudah keluar) — perlu
+  tracking wallet spesifik, di luar cakupan API token/pool yang ada.
+- **`price_change_24h`** untuk tag Layer 3 "Fee vs Drawdown" — field ini
+  tidak diekspos GMGN (hanya `price_change_percent1h` yang tersedia),
+  Krystal, maupun DexPaprika secara langsung.
 
 ## Riwayat debugging (untuk referensi)
 

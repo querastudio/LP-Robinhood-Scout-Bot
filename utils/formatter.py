@@ -248,6 +248,8 @@ def build_alert_message(token: dict) -> str:
         lines.append(f"🔥 Momentum naik ({layer3_tags.get('momentum_ratio', 0):.1f}x avg 1h)")
     if "fee_vs_drawdown_ratio" in layer3_tags:
         lines.append(f"💡 Fee/Drawdown ratio: {layer3_tags['fee_vs_drawdown_ratio']:.2f}")
+    if layer3_tags.get("new_pool"):
+        lines.append(f"⚠️ Pool Baru — usia baru {fmt_age_days(layer3_tags.get('pool_age_days'))}, belum teruji")
     lines += [
         f"🔥 Hot Search: {'#' + str(token['hot_search_rank']) if token.get('hot_search_rank') is not None else 'N/A'}",
         f"⏰ {now_wib_str()}",

@@ -81,7 +81,6 @@ Semua threshold dikonfigurasi lewat environment variable, default di
 
   | Metrik | Minimum default | Env var |
   |---|---|---|
-  | Umur pool | ≥ 7 hari | `MIN_POOL_AGE_DAYS` |
   | TVL pool | ≥ $10.000 | `MIN_POOL_TVL` |
   | Volume 24h / TVL | ≥ 2x | `MIN_VOL_TVL_RATIO` |
   | Fee 24h / TVL | ≥ 10%/hari | `MIN_FEE_TVL_PCT` |
@@ -91,6 +90,12 @@ Semua threshold dikonfigurasi lewat environment variable, default di
   dari API manapun (mis. Krystal tidak pernah punya timestamp umur pool)
   **di-skip untuk pool itu**, bukan me-reject-nya — data hilang tidak
   diperlakukan sebagai data buruk.
+
+  **Umur pool BUKAN hard filter** — `MIN_POOL_AGE_DAYS` (default 7 hari)
+  cuma referensi "nice to have", bukan syarat wajib. Pool yang lebih muda
+  dari `NEW_POOL_WARNING_DAYS` (default 1 hari) tetap bisa lolos dan
+  dikirim notif, cuma ditandai tag "⚠️ Pool Baru" di badan notifikasi biar
+  user tahu dan bisa menilai sendiri — bukan otomatis ditolak.
 
   **Layer 2** — seleksi antar sibling pool: kalau token punya ≥2 pool yang
   lolos Layer 1, bot memilih SATU pemenang (bukan mengirim notif untuk
@@ -110,6 +115,8 @@ Semua threshold dikonfigurasi lewat environment variable, default di
   - 🔥 **Momentum naik** — volume 1 jam dibanding rata-rata volume 24 jam
     (per jam); tampil kalau rasionya di atas `MOMENTUM_RATIO_THRESHOLD`
     (default 1.5x).
+  - ⚠️ **Pool Baru** — tampil kalau umur pool di bawah
+    `NEW_POOL_WARNING_DAYS` (default 1 hari). Bukan filter, cuma warning.
   - 💡 **Fee vs Drawdown** — rasio Fee/TVL dibanding price drawdown 24 jam.
     **Belum aktif**: tidak ada API yang terintegrasi di bot ini (GMGN,
     Krystal, DexPaprika, Alchemy) yang menyediakan `price_change_24h` —

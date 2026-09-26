@@ -198,7 +198,14 @@ MIN_VOL_TVL_24H_REQUIRED = os.environ.get("MIN_VOL_TVL_24H_REQUIRED", "false").l
 # value below threshold fails a check. Punishing missing data as if it
 # were bad data caused real false rejections before (see the pool_count /
 # MIN_VOL_TVL_24H_REQUIRED history above) — don't repeat that mistake here.
+#
+# MIN_POOL_AGE_DAYS is a "nice to have" REFERENCE ONLY, not a hard filter —
+# per explicit instruction, a pool's age alone should never block an
+# otherwise-good alert. A pool younger than NEW_POOL_WARNING_DAYS instead
+# gets a "pool baru" warning tag in the alert (see
+# screener.enrich_layer3_tags) so the user can judge for themselves.
 MIN_POOL_AGE_DAYS = _env_float("MIN_POOL_AGE_DAYS", 7)
+NEW_POOL_WARNING_DAYS = _env_float("NEW_POOL_WARNING_DAYS", 1)
 MIN_VOL_TVL_RATIO = _env_float("MIN_VOL_TVL_RATIO", 2)
 MIN_FEE_TVL_PCT = _env_float("MIN_FEE_TVL_PCT", 10)
 # Layer 2 (sibling selection): among a token's sibling pools (same token,

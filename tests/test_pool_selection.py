@@ -8,6 +8,7 @@ on any failure so it still works fine if a CI step is ever wired up.
 """
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -62,6 +63,34 @@ def test_layer1_skips_missing_age_gracefully():
     its own, only a KNOWN value below the minimum does."""
     passed, reason = screener.filter_pool_layer1(_pool(created_at=None))
     assert passed and reason is None
+
+
+def test_layer1_never_rejects_on_age_alone():
+    """MIN_POOL_AGE_DAYS is a nice-to-have reference only — even a pool
+    created seconds ago must still pass Layer 1 (age is never a hard
+    reject reason); a brand-new pool is instead flagged separately as a
+    "pool baru" warning tag, not blocked outright."""
+    brand_new = _pool(created_at=time.time())
+    passed, reason = screener.filter_pool_layer1(brand_new)
+    assert passed and reason is None
+    assert brand_new["_layer1_metrics"]["pool_age_days"] < 1
+
+
+def test_enrich_layer3_tags_flags_new_pool():
+    token = {
+        "pool_age_days": 0.2,
+        "volume_1h": None,
+        "vol_24h_usd": None,
+    }
+    tags = screener.enrich_layer3_tags(token)
+    assert tags.get("new_pool") is True
+    assert tags["pool_age_days"] == 0.2
+
+
+def test_enrich_layer3_tags_no_warning_for_established_pool():
+    token = {"pool_age_days": 30, "volume_1h": None, "vol_24h_usd": None}
+    tags = screener.enrich_layer3_tags(token)
+    assert "new_pool" not in tags
 
 
 def test_cerebro_sibling_case():

@@ -232,12 +232,20 @@ def _pool_age_days(pool: dict) -> Optional[float]:
 
 
 def filter_pool_layer1(pool: dict) -> tuple[bool, Optional[str]]:
-    """Per-pool hard filter (CEREBRO criteria): TVL, Vol/TVL, Fee/TVL, age,
-    and base fee tier must ALL clear their minimums at once. Graceful-skip
-    on each individual check when that pool's source didn't report the
-    field — see config.py's comment on this gate for why. Returns
-    (passed, first_failure_reason_or_None); also stashes the computed
-    ratios on the pool dict under "_layer1_metrics" for display/reuse.
+    """Per-pool hard filter (CEREBRO criteria): TVL, Vol/TVL, Fee/TVL, and
+    base fee tier must ALL clear their minimums at once. Graceful-skip on
+    each individual check when that pool's source didn't report the field
+    — see config.py's comment on this gate for why. Returns (passed,
+    first_failure_reason_or_None); also stashes the computed ratios on the
+    pool dict under "_layer1_metrics" for display/reuse.
+
+    Pool age is NOT a hard-reject condition here — MIN_POOL_AGE_DAYS (7
+    days) is a "nice to have" reference only, not enforced. A brand-new
+    pool (< config.NEW_POOL_WARNING_DAYS old) still passes and can still
+    alert; it's flagged instead as a "pool baru" warning tag (see
+    enrich_layer3_tags) so the user sees it and can judge for themselves,
+    per explicit instruction: age alone shouldn't block a genuinely good
+    fresh pool the way TVL/Vol-TVL/Fee-TVL data quality issues should.
     """
     tvl = pool.get("tvl_usd")
     volume_24h = pool.get("volume_24h")
@@ -255,8 +263,6 @@ def filter_pool_layer1(pool: dict) -> tuple[bool, Optional[str]]:
     }
 
     reasons: list[str] = []
-    if age_days is not None and age_days < config.MIN_POOL_AGE_DAYS:
-        reasons.append("pool_age")
     if tvl is not None and tvl < config.MIN_POOL_TVL:
         reasons.append("pool_tvl")
     if vol_tvl_ratio is not None and vol_tvl_ratio < config.MIN_VOL_TVL_RATIO:
@@ -361,6 +367,15 @@ def enrich_layer3_tags(token: dict) -> dict:
         drawdown = abs(price_change_24h)
         if drawdown > 0:
             tags["fee_vs_drawdown_ratio"] = fee_tvl_pct / drawdown
+
+    # "Pool baru" warning: age itself never blocks an alert (see
+    # filter_pool_layer1's docstring) — a pool younger than
+    # NEW_POOL_WARNING_DAYS just gets flagged so the user can judge for
+    # themselves, since a very fresh pool is inherently less proven.
+    pool_age_days = token.get("pool_age_days")
+    if pool_age_days is not None and pool_age_days < config.NEW_POOL_WARNING_DAYS:
+        tags["new_pool"] = True
+        tags["pool_age_days"] = pool_age_days
 
     return tags
 

@@ -145,6 +145,10 @@ def normalize_pool(pool: dict, token_address: str) -> dict:
         # baseline (h1/12) for spike detection — distinct from the
         # token-level volume_1h GMGN already supplies for display.
         "volume_1h_pool": _to_float(volume_usd.get("h1")),
+        # 6h volume, purely for display — a second timeframe alongside 5m
+        # so the alert shows whether activity is sustained or a one-off
+        # blip. Confirmed present in the same live raw response as m5/h1/h24.
+        "volume_6h": _to_float(volume_usd.get("h6")),
         "created_at": _parse_iso_timestamp(attrs.get("pool_created_at")),
         "other_token_address": other_addr,
         "_raw": pool,

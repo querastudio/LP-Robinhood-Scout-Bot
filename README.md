@@ -110,6 +110,12 @@ Semua threshold dikonfigurasi lewat environment variable, default di
 
   Hasil seleksi ditampilkan di notifikasi sebagai baris "Sibling Win".
 
+- **Field display tambahan (bukan filter)**: `Volume (6h)` dari
+  GeckoTerminal (biar kelihatan aktivitas 5 menit itu one-off blip atau
+  memang sustained sampai 6 jam), dan `Trades 24h` — jumlah buy/sell/swap
+  dari GMGN (`buys_24h`/`sells_24h`/`swaps_24h`) — banyak transaksi kecil
+  dari banyak wallet beda rasanya dengan 2-3 swap besar doang.
+
 - **Layer 3 — tag informational (tidak menggagalkan pool)**: ditampilkan di
   notifikasi kalau datanya ada, tidak pernah jadi alasan reject.
   - 🔥 **Momentum naik** — volume 1 jam dibanding rata-rata volume 24 jam

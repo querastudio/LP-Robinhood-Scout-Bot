@@ -114,6 +114,18 @@ def _fmt_sibling_line(sibling_count: Optional[int], sibling_ratio: Optional[floa
     return f"Menang atas {sibling_count} sibling pool (vol ratio {ratio_str})"
 
 
+def _fmt_trades_line(buys: Optional[Any], sells: Optional[Any], swaps: Optional[Any]) -> str:
+    """Buys/sells/swap count — a proxy for how many distinct trades are
+    driving the volume: lots of small trades reads very differently from a
+    couple of huge wash-traded swaps."""
+    if buys is None and sells is None and swaps is None:
+        return "N/A"
+    buys_str = fmt_int(buys)
+    sells_str = fmt_int(sells)
+    swaps_str = f" ({fmt_int(swaps)} swaps)" if swaps is not None else ""
+    return f"{buys_str} buy / {sells_str} sell{swaps_str}"
+
+
 def _mark(value: Optional[Any], passes: Optional[bool]) -> str:
     """✅ / ❌ / ⚪ badge. `value` is the raw metric (None -> unknown/N/A
     regardless of `passes`); `passes` is the pre-computed pass/fail bool."""
@@ -204,9 +216,11 @@ def build_alert_message(token: dict) -> str:
         f"Volume (5m) : {fmt_usd(token.get('volume_5m'))} {_mark(token.get('volume_5m'), token.get('volume_5m') is not None and token.get('volume_5m') >= config.MIN_VOL_5M)}",
         f"Vol Spike   : {_fmt_spike_ratio(token.get('volume_5m'), token.get('volume_5m_baseline'))}",
         f"Volume (1h) : {fmt_usd(vol_1h)}",
+        f"Volume (6h) : {fmt_usd(token.get('volume_6h'))}",
         f"Liquidity   : {fmt_usd(liquidity)}",
         f"Total Fees  : {fmt_native(token.get('total_fees'))} {_mark(token.get('total_fees'), (token.get('total_fees') or 0) >= config.MIN_FEES if token.get('total_fees') is not None else None)}",
         f"Volume Type : {organic_line}",
+        f"Trades 24h  : {_fmt_trades_line(token.get('buys_24h'), token.get('sells_24h'), token.get('swaps_24h'))}",
         "━━━━━━━━━━━━━━━━━━━━━",
         "🪙 TOKEN SAFETY",
         "━━━━━━━━━━━━━━━━━━━━━",

@@ -241,6 +241,15 @@ def normalize_hot_search_item(item: dict) -> dict:
         # wash trading doesn't pass the filter just because it's large.
         "is_wash_trading": _truthy(item.get("is_wash_trading")),
         "rug_ratio": item.get("rug_ratio"),
+        # Trade-count breakdown, same generic (un-windowed, effectively 24h)
+        # field names confirmed live on the sibling /v1/market/rank endpoint
+        # ("buys"/"sells"/"swaps") — hot_searches shares that endpoint
+        # family's schema, same assumption already made for "volume" above.
+        # Harmless if wrong: just stays None (graceful), same as everywhere
+        # else in this bot.
+        "buys_24h": item.get("buys"),
+        "sells_24h": item.get("sells"),
+        "swaps_24h": item.get("swaps"),
         "_raw": item,
     }
 
@@ -282,6 +291,13 @@ def normalize_signal_item(item: dict) -> dict:
         # only ever showed up via those two, not a bug, a real GMGN
         # data-availability gap for that source.
         "total_fees": detail.get("total_fee"),
+        # Confirmed present in a live raw response (detail.buys_24h/
+        # sells_24h/swaps_24h, alongside the *_1h/*_1m variants) — a good
+        # "organic flow" signal: lots of small trades from many wallets
+        # reads very differently from a couple of huge wash-traded swaps.
+        "buys_24h": detail.get("buys_24h"),
+        "sells_24h": detail.get("sells_24h"),
+        "swaps_24h": detail.get("swaps_24h"),
         "_raw": item,
     }
 
@@ -304,5 +320,11 @@ def normalize_rank_item(item: dict) -> dict:
         "price_change_1h": item.get("price_change_percent1h"),
         "token_age_days": _token_age_days(item.get("creation_timestamp") or item.get("open_timestamp")),
         "quote_address": item.get("launch_quote_address") or item.get("quote_address"),
+        # Confirmed live: rank items carry "swaps"/"buys"/"sells" directly
+        # (e.g. {"swaps": 563, "buys": 281, "sells": 282}) — un-windowed,
+        # same convention as this endpoint's generic "volume" field.
+        "buys_24h": item.get("buys"),
+        "sells_24h": item.get("sells"),
+        "swaps_24h": item.get("swaps"),
         "_raw": item,
     }

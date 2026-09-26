@@ -448,6 +448,10 @@ def _apply_geckoterminal_enrichment(token: dict, best: dict) -> None:
     # filling a None, since this is the one field expected to come from
     # here specifically.
     token["volume_5m"] = best.get("volume_5m")
+    # Same reasoning as volume_5m — only GeckoTerminal exposes this, purely
+    # for display (a second timeframe next to 5m, so the alert shows
+    # whether activity is sustained or a one-off blip).
+    token["volume_6h"] = best.get("volume_6h")
     # 5-min average baseline from the pool's own hourly volume (h1/12),
     # used to detect a real spike relative to the token's normal activity
     # rather than just checking an absolute dollar figure.

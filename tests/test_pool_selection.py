@@ -145,6 +145,23 @@ def test_no_candidates_clear_layer1_returns_none():
     assert screener.select_best_sibling([only_bad_pool]) is None
 
 
+def test_is_proven_by_pool_quality_cerebro_case():
+    """CEREBRO's real numbers (Vol/TVL 6.96x, Fee/TVL 13.91%/day) should
+    bypass the 5-minute spike gate entirely."""
+    token = {"vol_tvl_24h_pct": 696.0, "fees_tvl_24h_pct": 13.91}
+    assert screener.is_proven_by_pool_quality(token) is True
+
+
+def test_is_proven_by_pool_quality_rejects_weak_pool():
+    token = {"vol_tvl_24h_pct": 120.0, "fees_tvl_24h_pct": 2.0}
+    assert screener.is_proven_by_pool_quality(token) is False
+
+
+def test_is_proven_by_pool_quality_missing_data_never_bypasses():
+    assert screener.is_proven_by_pool_quality({}) is False
+    assert screener.is_proven_by_pool_quality({"vol_tvl_24h_pct": 900.0}) is False
+
+
 def _run_all() -> None:
     tests = [(name, fn) for name, fn in sorted(globals().items()) if name.startswith("test_") and callable(fn)]
     failed = 0

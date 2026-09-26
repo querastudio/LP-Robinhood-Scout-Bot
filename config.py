@@ -75,17 +75,34 @@ MIN_LIQUIDITY = _env_float("MIN_LIQUIDITY", 10_000)
 # Two parts, per the user's own framing ("intinya ada spike volume tinggi
 # dibanding rata-rata volume yang diterima tokennya" — the point is a
 # spike relative to the token's own average, not just a big number):
-# - MIN_VOL_5M: absolute floor in USD, always required. Loosened from
-#   $100k to $50k after a live run showed $100k rejected everything
-#   (0/23 candidates checked cleared it).
+# - MIN_VOL_5M: absolute floor in USD, always required. Loosened again
+#   from $50K to $10K — CEREBRO (a real pool the user pointed to as the
+#   target quality bar: TVL ~$101.7K, 30m volume ~$70.8K) implies a
+#   normal 5-min window well under $50K most of the time; requiring $50K
+#   in 5 minutes means turning over half the pool's whole TVL every 5
+#   minutes, an unreasonably high bar for a genuinely good but not
+#   pump-like pool.
 # - VOL_5M_SPIKE_MULTIPLIER: the real "spike" signal — m5 volume must be
 #   at least Nx the pool's own hourly-average 5-min rate (h1 volume / 12,
-#   from the same GeckoTerminal pool object). Graceful when h1 data is
-#   missing (falls back to the floor alone) since it's a refinement on
-#   top of the floor, not a separate hard requirement.
-# Both fail closed on volume_5m itself: unknown 5m volume never passes.
-MIN_VOL_5M = _env_float("MIN_VOL_5M", 50_000)
-VOL_5M_SPIKE_MULTIPLIER = _env_float("VOL_5M_SPIKE_MULTIPLIER", 3.0)
+#   from the same GeckoTerminal pool object). Loosened from 3x to 1.5x for
+#   the same reason. Graceful when h1 data is missing (falls back to the
+#   floor alone) since it's a refinement on top of the floor, not a
+#   separate hard requirement.
+# Both fail closed on volume_5m itself: unknown 5m volume never passes —
+# UNLESS the pool already proved itself via SPIKE_BYPASS_* below.
+MIN_VOL_5M = _env_float("MIN_VOL_5M", 10_000)
+VOL_5M_SPIKE_MULTIPLIER = _env_float("VOL_5M_SPIKE_MULTIPLIER", 1.5)
+# Bypass for the 5-minute spike gate: a pool whose own 24h Vol/TVL and
+# Fee/TVL (from screener._compute_pool_ratios, already computed — no extra
+# API calls) already show CEREBRO-level SUSTAINED activity doesn't need to
+# also clear a noisy, punishing 5-minute snapshot to prove it's "kencang".
+# Real case: CEREBRO itself (Vol/TVL 6.96x, Fee/TVL 13.91%/day) comfortably
+# clears both of these, so it alerts even in a 5-minute window with little
+# GeckoTerminal-visible activity right that instant — a real, proven pool
+# shouldn't be missed just because the specific 5 minutes it got checked in
+# happened to be quiet.
+SPIKE_BYPASS_VOL_TVL_PCT = _env_float("SPIKE_BYPASS_VOL_TVL_PCT", 500)  # 5x
+SPIKE_BYPASS_FEE_TVL_PCT = _env_float("SPIKE_BYPASS_FEE_TVL_PCT", 10)
 # Demoted from a hard filter (was the #1 rejection reason in live runs —
 # 130/151 candidates in one run — and actively worked against the
 # "organic volume" goal by requiring a pump-like price spike rather than

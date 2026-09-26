@@ -122,6 +122,23 @@ Semua threshold dikonfigurasi lewat environment variable, default di
     Krystal, DexPaprika, Alchemy) yang menyediakan `price_change_24h` —
     lihat "Phase 2 backlog" di bawah.
 
+- **Gate terakhir sebelum kirim — spike volume 5 menit** (`main.py`, bukan
+  bagian dari `screener.py`): token yang lolos Gate A+B masih harus lolos
+  cek "volume deras" — volume 5 menit terakhir (dari GeckoTerminal) harus
+  ≥ `MIN_VOL_5M` (default $10.000) **dan** ≥ `VOL_5M_SPIKE_MULTIPLIER`x
+  (default 1.5x) rata-rata volume per-5-menit token itu sendiri.
+  - **Bypass**: kalau pool-nya sudah kebukti "kencang" secara 24 jam lewat
+    Vol/TVL ≥ `SPIKE_BYPASS_VOL_TVL_PCT` (default 500%, alias 5x) **dan**
+    Fee/TVL ≥ `SPIKE_BYPASS_FEE_TVL_PCT` (default 10%/hari), cek spike
+    5-menit ini di-skip total — pool kayak CEREBRO (Vol/TVL 6.96x, Fee/TVL
+    13.91%/hari) sudah kebukti aktif secara harian, jadi tidak boleh
+    ketinggalan notif cuma karena momen 5 menit spesifik yang dicek pas
+    lagi sepi.
+  - Default sebelumnya ($50.000 + 3x) ternyata kelewat ketat — bahkan pool
+    sekelas CEREBRO (TVL ~$101.7K) nyaris tidak pernah punya volume $50K
+    dalam SATU window 5 menit (itu setara muter setengah TVL-nya tiap 5
+    menit).
+
 ## Phase 2 backlog
 
 Item-item ini butuh sumber data baru yang belum ada integrasinya di bot ini

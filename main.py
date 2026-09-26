@@ -88,6 +88,11 @@ async def run() -> None:
     # so a token that fails the spike check doesn't consume an alert slot;
     # fails closed on volume_5m itself (no GeckoTerminal data = skipped),
     # but gracefully skips the relative check when no h1 baseline exists.
+    #
+    # Bypassed entirely for a pool already proven "kencang" by its own 24h
+    # Vol/TVL + Fee/TVL (screener.is_proven_by_pool_quality) — a real,
+    # sustained CEREBRO-style pool shouldn't be missed just because the
+    # specific 5-minute window it got checked in happened to be quiet.
     skipped_no_spike = 0
     to_alert = []
     if candidates:
@@ -95,14 +100,15 @@ async def run() -> None:
         try:
             for token in candidates[: config.MAX_SPIKE_CHECK_CANDIDATES]:
                 await screener.enrich_with_geckoterminal(gt_client, token)
-                vol_5m = token.get("volume_5m")
-                if vol_5m is None or vol_5m < config.MIN_VOL_5M:
-                    skipped_no_spike += 1
-                    continue
-                baseline = token.get("volume_5m_baseline")
-                if baseline and vol_5m < config.VOL_5M_SPIKE_MULTIPLIER * baseline:
-                    skipped_no_spike += 1
-                    continue
+                if not screener.is_proven_by_pool_quality(token):
+                    vol_5m = token.get("volume_5m")
+                    if vol_5m is None or vol_5m < config.MIN_VOL_5M:
+                        skipped_no_spike += 1
+                        continue
+                    baseline = token.get("volume_5m_baseline")
+                    if baseline and vol_5m < config.VOL_5M_SPIKE_MULTIPLIER * baseline:
+                        skipped_no_spike += 1
+                        continue
                 to_alert.append(token)
                 if len(to_alert) >= config.MAX_ALERTS_RUN:
                     break

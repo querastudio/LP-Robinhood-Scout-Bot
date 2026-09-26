@@ -343,6 +343,23 @@ def select_best_sibling(pools: list[dict]) -> Optional[dict]:
     return winner
 
 
+def is_proven_by_pool_quality(token: dict) -> bool:
+    """True when the token's own 24h Vol/TVL and Fee/TVL already show
+    CEREBRO-level sustained trading activity (see config.SPIKE_BYPASS_*),
+    strong enough that main.py's send-time volume-5m spike check
+    (main.run's real "volume deras" gate) can be skipped entirely — a pool
+    proven over a full day of real DexPaprika/Krystal data shouldn't be
+    missed just because one noisy 5-minute GeckoTerminal snapshot happened
+    to be quiet. Both ratios must be KNOWN and clear their threshold;
+    missing data never bypasses (falls through to the normal spike check)."""
+    vol_tvl_pct = token.get("vol_tvl_24h_pct")
+    fees_tvl_pct = token.get("fees_tvl_24h_pct")
+    return (
+        vol_tvl_pct is not None and vol_tvl_pct >= config.SPIKE_BYPASS_VOL_TVL_PCT
+        and fees_tvl_pct is not None and fees_tvl_pct >= config.SPIKE_BYPASS_FEE_TVL_PCT
+    )
+
+
 def enrich_layer3_tags(token: dict) -> dict:
     """Layer 3: purely informational tags for the alert body — never gate
     pass/fail. Empty dict when the underlying data isn't available (e.g.

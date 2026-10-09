@@ -261,6 +261,10 @@ def build_alert_message(token: dict) -> str:
         lines.append(f"💡 Fee/Drawdown ratio: {layer3_tags['fee_vs_drawdown_ratio']:.2f}")
     if layer3_tags.get("new_pool"):
         lines.append(f"⚠️ Pool Baru — usia baru {fmt_age_days(layer3_tags.get('pool_age_days'))}, belum teruji")
+    unverified = token.get("entry_gate_unverified") or []
+    if unverified:
+        labels = {"fee_tvl_1h": "Fee/TVL 1h", "fee_tvl_24h": "Fee/TVL 24h", "pullback_from_high": "Pullback"}
+        lines.append("⚠️ Tidak terverifikasi (data tidak tersedia): " + ", ".join(labels.get(u, u) for u in unverified))
     lines += [
         f"🔥 Hot Search: {'#' + str(token['hot_search_rank']) if token.get('hot_search_rank') is not None else 'N/A'}",
         f"⏰ {now_wib_str()}",

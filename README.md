@@ -132,8 +132,11 @@ Semua threshold dikonfigurasi lewat environment variable, default di
 
 - **Entry gate sebelum kirim** (`screener.passes_entry_gate`, dipanggil
   dari `main.py`): replika 1:1 rule "Enter" di platform trading kamu —
-  SEMUA harus terpenuhi (AND), dan **unknown = ditolak** (fail-closed,
-  pengecualian disengaja dari prinsip graceful-skip bot ini):
+  SEMUA harus terpenuhi (AND). Data yang tidak ada = ditolak (fail-closed),
+  KECUALI Fee/TVL 1h/24h (kalau fee tier pool tidak diketahui) dan pullback
+  (kalau OHLCV & ATH tidak ada): dua itu di-skip dan ditandai
+  "⚠️ Tidak terverifikasi" di notif, karena datanya memang sering tidak
+  tersedia dari API manapun:
 
   | Kriteria | Default | Env var |
   |---|---|---|

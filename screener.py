@@ -353,14 +353,19 @@ def _ath_pullback_pct(token: dict) -> Optional[float]:
 
 
 def passes_entry_gate(token: dict) -> tuple[bool, list[str]]:
-    """Final send-time gate: ALL of the user's entry criteria must be
-    verifiably true (hard AND). Unlike the rest of this bot it FAILS CLOSED
-    on unknown data — an alert must only fire when every criterion is
-    confirmed. Expects the token to be GeckoTerminal-enriched. Stores the
-    derived fee_tvl_1h_pct / pullback_from_high_pct on the token for the
-    alert formatter. Returns (passed, failed_criteria).
+    """Final send-time gate: the user's entry criteria, hard AND. Criteria
+    that depend on data we genuinely cannot obtain for some pools are
+    SKIPPED (not failed) and listed in token["entry_gate_unverified"] so the
+    alert can flag them: fee/TVL (1h and 24h) when the pool's fee tier is
+    unknown (DexPaprika's fee is null, Krystal is out of credit, and only
+    some DEX pool names carry it), and pullback when neither GeckoTerminal
+    OHLCV nor GMGN's ATH is available. Everything else fails closed on
+    unknown. Expects a GeckoTerminal-enriched token; stores derived
+    fee_tvl_1h_pct / pullback_from_high_pct for the formatter.
+    Returns (passed, failed_criteria).
     """
     reasons: list[str] = []
+    unverified: list[str] = []
 
     tvl = token.get("pool_tvl") or token.get("liquidity")
     if tvl is None or tvl < config.MIN_POOL_TVL:
@@ -370,12 +375,18 @@ def passes_entry_gate(token: dict) -> tuple[bool, list[str]]:
     if vol_24h is None or vol_24h < config.MIN_POOL_VOLUME_24H:
         reasons.append("volume_24h")
 
-    vol_1h = token.get("vol_1h_usd")
     fee_tier = token.get("fee_tier_pct")
+    vol_1h = token.get("vol_1h_usd")
     fee_tvl_1h = (vol_1h * (fee_tier / 100) / tvl * 100) if (vol_1h is not None and fee_tier is not None and tvl) else None
     token["fee_tvl_1h_pct"] = fee_tvl_1h
-    if fee_tvl_1h is None or fee_tvl_1h < config.ENTRY_MIN_1H_FEE_TVL_PCT:
-        reasons.append("fee_tvl_1h")
+    if fee_tier is None:
+        unverified += ["fee_tvl_1h", "fee_tvl_24h"]
+    else:
+        if fee_tvl_1h is None or fee_tvl_1h < config.ENTRY_MIN_1H_FEE_TVL_PCT:
+            reasons.append("fee_tvl_1h")
+        fee_tvl_24h = token.get("fees_tvl_24h_pct")
+        if fee_tvl_24h is None or fee_tvl_24h < config.MIN_FEE_TVL_PCT:
+            reasons.append("fee_tvl_24h")
 
     trades_1h = token.get("trades_1h")
     if trades_1h is None or trades_1h < config.ENTRY_MIN_1H_TRADES:
@@ -385,19 +396,18 @@ def passes_entry_gate(token: dict) -> tuple[bool, list[str]]:
     if chg_1h is None or not (config.ENTRY_MIN_1H_PRICE_CHANGE_PCT <= chg_1h <= config.ENTRY_MAX_1H_PRICE_CHANGE_PCT):
         reasons.append("price_change_1h")
 
-    fee_tvl_24h = token.get("fees_tvl_24h_pct")
-    if fee_tvl_24h is None or fee_tvl_24h < config.MIN_FEE_TVL_PCT:
-        reasons.append("fee_tvl_24h")
-
     pullback = _ath_pullback_pct(token)
     token["pullback_from_high_pct"] = pullback
-    if pullback is None or pullback > config.ENTRY_MAX_PULLBACK_FROM_HIGH_PCT:
+    if pullback is None:
+        unverified.append("pullback_from_high")
+    elif pullback > config.ENTRY_MAX_PULLBACK_FROM_HIGH_PCT:
         reasons.append("pullback_from_high")
 
     chg_5m = token.get("pool_price_change_5m")
     if chg_5m is None or chg_5m < config.ENTRY_MIN_5M_PRICE_CHANGE_PCT:
         reasons.append("price_change_5m")
 
+    token["entry_gate_unverified"] = unverified
     return (not reasons, reasons)
 
 

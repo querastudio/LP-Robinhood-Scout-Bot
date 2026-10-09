@@ -93,9 +93,10 @@ async def run() -> None:
             for token in candidates[: config.MAX_SPIKE_CHECK_CANDIDATES]:
                 await screener.enrich_with_geckoterminal(gt_client, token)
                 passed, failed = screener.passes_entry_gate(token)
-                if not passed and failed == ["pullback_from_high"]:
-                    # Everything else passed — spend one extra call to get the
-                    # real 24h high instead of the ATH stand-in.
+                # Pullback needs one extra call (hourly OHLCV -> real 24h high):
+                # only when everything else passed, or the cheaper ATH stand-in
+                # is the sole thing failing.
+                if (passed and token.get("pullback_from_high_pct") is None) or failed == ["pullback_from_high"]:
                     await screener.fetch_pullback_24h(gt_client, token)
                     passed, failed = screener.passes_entry_gate(token)
                 if not passed:

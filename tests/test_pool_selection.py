@@ -185,13 +185,28 @@ def test_entry_gate_price_change_1h_lower_bound():
     assert not passed and "price_change_1h" in failed
 
 
-def test_entry_gate_fails_closed_on_missing_data():
+def test_entry_gate_fails_closed_on_missing_gecko_data():
     passed, failed = screener.passes_entry_gate({})
     assert not passed
-    assert set(failed) == {
-        "tvl", "volume_24h", "fee_tvl_1h", "trades_1h", "price_change_1h",
-        "fee_tvl_24h", "pullback_from_high", "price_change_5m",
-    }
+    assert set(failed) == {"tvl", "volume_24h", "trades_1h", "price_change_1h", "price_change_5m"}
+
+
+def test_entry_gate_skips_fee_criteria_when_fee_tier_unknown():
+    token = _entry_token(fee_tier_pct=None, vol_1h_usd=None, fees_tvl_24h_pct=None)
+    passed, failed = screener.passes_entry_gate(token)
+    assert passed and failed == []
+    assert set(token["entry_gate_unverified"]) == {"fee_tvl_1h", "fee_tvl_24h"}
+
+
+def test_entry_gate_skips_pullback_when_unknown():
+    token = _entry_token(ath_market_cap=None)
+    passed, failed = screener.passes_entry_gate(token)
+    assert passed and token["entry_gate_unverified"] == ["pullback_from_high"]
+
+
+def test_entry_gate_known_fee_tier_still_enforces_fee_criteria():
+    passed, failed = screener.passes_entry_gate(_entry_token(fees_tvl_24h_pct=None))
+    assert not passed and failed == ["fee_tvl_24h"]
 
 
 def _run_all() -> None:

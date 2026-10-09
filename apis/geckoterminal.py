@@ -45,17 +45,17 @@ class GeckoTerminalClient:
         self._last_call = 0.0
 
     async def _get(self, path: str, params: dict):
-        """Paced GET (free tier is 30 req/min -> >= 2.1s apart) with one
-        retry after a 429 — live runs showed bursts of 429s otherwise."""
-        for attempt in range(2):
+        """Paced GET (free tier is 30 req/min -> >= 2.1s apart) with up to
+        two retries after a 429 — live runs showed bursts of 429s otherwise."""
+        for attempt in range(3):
             async with self._lock:
                 wait = config.GECKOTERMINAL_MIN_INTERVAL_SEC - (time.monotonic() - self._last_call)
                 if wait > 0:
                     await asyncio.sleep(wait)
                 self._last_call = time.monotonic()
                 resp = await self._client.get(path, params=params)
-            if resp.status_code == 429 and attempt == 0:
-                await asyncio.sleep(config.GECKOTERMINAL_MIN_INTERVAL_SEC * 2)
+            if resp.status_code == 429 and attempt < 2:
+                await asyncio.sleep(config.GECKOTERMINAL_MIN_INTERVAL_SEC * 2 * (attempt + 1))
                 continue
             resp.raise_for_status()
             return resp

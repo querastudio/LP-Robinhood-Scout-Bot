@@ -21,6 +21,7 @@ this project's rule of never trusting an unvalidated schema.
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -184,7 +185,14 @@ def normalize_pool(pool: dict, token_address: str) -> dict:
             elif quote_addr and quote_addr.lower() == token_lower:
                 quote_symbol = parts[0]
 
+    # Fee tier is only in the pool name for some DEXes (live sample:
+    # "Agrippa / USDG 1.01%"); DexPaprika's "fee" is null and Krystal is out
+    # of credit, so this is often the only source. None when the name has none.
+    fee_match = re.search(r"(\d+(?:\.\d+)?)\s*%\s*$", name) if isinstance(name, str) else None
+    fee_tier_pct = float(fee_match.group(1)) if fee_match else None
+
     return {
+        "fee_tier_pct": fee_tier_pct,
         "pool_address": _pool_short_address(pool.get("id")),
         "dex": dex_id,
         "quote_symbol": quote_symbol,

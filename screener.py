@@ -494,6 +494,10 @@ def _apply_geckoterminal_enrichment(token: dict, best: dict) -> None:
     # whether activity is sustained or a one-off blip).
     token["volume_6h"] = best.get("volume_6h")
     token["vol_1h_usd"] = best.get("volume_1h_pool")
+    if token.get("fee_tier_pct") is None and best.get("fee_tier_pct") is not None:
+        token["fee_tier_pct"] = best["fee_tier_pct"]
+    if token.get("fees_24h_usd") is None and token.get("fee_tier_pct") is not None and token.get("vol_24h_usd") is not None:
+        token["fees_24h_usd"] = token["vol_24h_usd"] * token["fee_tier_pct"] / 100
     token["gt_pool_address"] = best.get("pool_address")
     token["pool_price_change_5m"] = best.get("price_change_m5")
     token["pool_price_change_1h"] = best.get("price_change_h1")

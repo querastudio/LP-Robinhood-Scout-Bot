@@ -232,25 +232,21 @@ def _pool_age_days(pool: dict) -> Optional[float]:
 
 
 def filter_pool_layer1(pool: dict) -> tuple[bool, Optional[str]]:
-    """Per-pool hard filter (CEREBRO criteria): TVL, Vol/TVL, Fee/TVL, and
-    base fee tier must ALL clear their minimums at once. Graceful-skip on
-    each individual check when that pool's source didn't report the field
-    — see config.py's comment on this gate for why. Returns (passed,
-    first_failure_reason_or_None); also stashes the computed ratios on the
-    pool dict under "_layer1_metrics" for display/reuse.
+    """Per-pool hard filter on the criteria computable cheaply for EVERY
+    candidate (Krystal/DexPaprika data): TVL >= MIN_POOL_TVL, 24h volume >=
+    MIN_POOL_VOLUME_24H, 24h fee/TVL >= MIN_FEE_TVL_PCT — the first, second
+    and sixth conditions of the user's entry rule set (the 1h/5m ones need
+    GeckoTerminal and are enforced later by passes_entry_gate). Graceful-skip
+    on a field the source didn't report; only a KNOWN value below its
+    threshold fails. Returns (passed, first_failure_reason_or_None); also
+    stashes computed ratios under "_layer1_metrics".
 
-    Pool age is NOT a hard-reject condition here — MIN_POOL_AGE_DAYS (7
-    days) is a "nice to have" reference only, not enforced. A brand-new
-    pool (< config.NEW_POOL_WARNING_DAYS old) still passes and can still
-    alert; it's flagged instead as a "pool baru" warning tag (see
-    enrich_layer3_tags) so the user sees it and can judge for themselves,
-    per explicit instruction: age alone shouldn't block a genuinely good
-    fresh pool the way TVL/Vol-TVL/Fee-TVL data quality issues should.
+    Pool age and fee tier are NOT hard-reject conditions: age only drives
+    the "pool baru" warning (enrich_layer3_tags), fee tier is display-only.
     """
     tvl = pool.get("tvl_usd")
     volume_24h = pool.get("volume_24h")
     fees_24h = pool.get("fees_24h_usd")
-    fee_tier = pool.get("fee_tier_pct")
     age_days = _pool_age_days(pool)
 
     vol_tvl_ratio = (volume_24h / tvl) if (volume_24h is not None and tvl) else None
@@ -265,12 +261,10 @@ def filter_pool_layer1(pool: dict) -> tuple[bool, Optional[str]]:
     reasons: list[str] = []
     if tvl is not None and tvl < config.MIN_POOL_TVL:
         reasons.append("pool_tvl")
-    if vol_tvl_ratio is not None and vol_tvl_ratio < config.MIN_VOL_TVL_RATIO:
-        reasons.append("vol_tvl_ratio")
+    if volume_24h is not None and volume_24h < config.MIN_POOL_VOLUME_24H:
+        reasons.append("volume_24h")
     if fee_tvl_pct is not None and fee_tvl_pct < config.MIN_FEE_TVL_PCT:
         reasons.append("fee_tvl_pct")
-    if fee_tier is not None and fee_tier < config.MIN_BASE_FEE_PCT:
-        reasons.append("base_fee")
 
     return (not reasons, reasons[0] if reasons else None)
 
@@ -343,21 +337,64 @@ def select_best_sibling(pools: list[dict]) -> Optional[dict]:
     return winner
 
 
-def is_proven_by_pool_quality(token: dict) -> bool:
-    """True when the token's own 24h Vol/TVL and Fee/TVL already show
-    CEREBRO-level sustained trading activity (see config.SPIKE_BYPASS_*),
-    strong enough that main.py's send-time volume-5m spike check
-    (main.run's real "volume deras" gate) can be skipped entirely — a pool
-    proven over a full day of real DexPaprika/Krystal data shouldn't be
-    missed just because one noisy 5-minute GeckoTerminal snapshot happened
-    to be quiet. Both ratios must be KNOWN and clear their threshold;
-    missing data never bypasses (falls through to the normal spike check)."""
-    vol_tvl_pct = token.get("vol_tvl_24h_pct")
-    fees_tvl_pct = token.get("fees_tvl_24h_pct")
-    return (
-        vol_tvl_pct is not None and vol_tvl_pct >= config.SPIKE_BYPASS_VOL_TVL_PCT
-        and fees_tvl_pct is not None and fees_tvl_pct >= config.SPIKE_BYPASS_FEE_TVL_PCT
-    )
+def _ath_pullback_pct(token: dict) -> Optional[float]:
+    """Drop from GMGN's token-level ATH market cap to the current one, in %.
+    Stand-in for "24h pullback from the high" (no integrated API exposes a
+    true 24h high); ATH >= 24h high, so it is the stricter reading."""
+    ath = token.get("ath_market_cap")
+    mcap = token.get("market_cap")
+    if not ath or mcap is None or ath <= 0:
+        return None
+    return max(0.0, (ath - mcap) / ath * 100)
+
+
+def passes_entry_gate(token: dict) -> tuple[bool, list[str]]:
+    """Final send-time gate: ALL of the user's entry criteria must be
+    verifiably true (hard AND). Unlike the rest of this bot it FAILS CLOSED
+    on unknown data — an alert must only fire when every criterion is
+    confirmed. Expects the token to be GeckoTerminal-enriched. Stores the
+    derived fee_tvl_1h_pct / pullback_from_high_pct on the token for the
+    alert formatter. Returns (passed, failed_criteria).
+    """
+    reasons: list[str] = []
+
+    tvl = token.get("pool_tvl") or token.get("liquidity")
+    if tvl is None or tvl < config.MIN_POOL_TVL:
+        reasons.append("tvl")
+
+    vol_24h = token.get("vol_24h_usd")
+    if vol_24h is None or vol_24h < config.MIN_POOL_VOLUME_24H:
+        reasons.append("volume_24h")
+
+    vol_1h = token.get("vol_1h_usd")
+    fee_tier = token.get("fee_tier_pct")
+    fee_tvl_1h = (vol_1h * (fee_tier / 100) / tvl * 100) if (vol_1h is not None and fee_tier is not None and tvl) else None
+    token["fee_tvl_1h_pct"] = fee_tvl_1h
+    if fee_tvl_1h is None or fee_tvl_1h < config.ENTRY_MIN_1H_FEE_TVL_PCT:
+        reasons.append("fee_tvl_1h")
+
+    trades_1h = token.get("trades_1h")
+    if trades_1h is None or trades_1h < config.ENTRY_MIN_1H_TRADES:
+        reasons.append("trades_1h")
+
+    chg_1h = token.get("pool_price_change_1h")
+    if chg_1h is None or not (config.ENTRY_MIN_1H_PRICE_CHANGE_PCT <= chg_1h <= config.ENTRY_MAX_1H_PRICE_CHANGE_PCT):
+        reasons.append("price_change_1h")
+
+    fee_tvl_24h = token.get("fees_tvl_24h_pct")
+    if fee_tvl_24h is None or fee_tvl_24h < config.MIN_FEE_TVL_PCT:
+        reasons.append("fee_tvl_24h")
+
+    pullback = _ath_pullback_pct(token)
+    token["pullback_from_high_pct"] = pullback
+    if pullback is None or pullback > config.ENTRY_MAX_PULLBACK_FROM_HIGH_PCT:
+        reasons.append("pullback_from_high")
+
+    chg_5m = token.get("pool_price_change_5m")
+    if chg_5m is None or chg_5m < config.ENTRY_MIN_5M_PRICE_CHANGE_PCT:
+        reasons.append("price_change_5m")
+
+    return (not reasons, reasons)
 
 
 def enrich_layer3_tags(token: dict) -> dict:
@@ -452,6 +489,10 @@ def _apply_geckoterminal_enrichment(token: dict, best: dict) -> None:
     # for display (a second timeframe next to 5m, so the alert shows
     # whether activity is sustained or a one-off blip).
     token["volume_6h"] = best.get("volume_6h")
+    token["vol_1h_usd"] = best.get("volume_1h_pool")
+    token["pool_price_change_5m"] = best.get("price_change_m5")
+    token["pool_price_change_1h"] = best.get("price_change_h1")
+    token["trades_1h"] = best.get("tx_count_h1")
     # 5-min average baseline from the pool's own hourly volume (h1/12),
     # used to detect a real spike relative to the token's normal activity
     # rather than just checking an absolute dollar figure.

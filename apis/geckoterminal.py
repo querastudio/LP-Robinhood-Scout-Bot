@@ -149,6 +149,13 @@ def normalize_pool(pool: dict, token_address: str) -> dict:
         # so the alert shows whether activity is sustained or a one-off
         # blip. Confirmed present in the same live raw response as m5/h1/h24.
         "volume_6h": _to_float(volume_usd.get("h6")),
+        # Pool-level price change and trade count, confirmed present in the
+        # same live raw responses ("price_change_percentage": {"m5","h1",...},
+        # "transactions": {"h1": {"buys","sells",...}}) — inputs for
+        # screener.passes_entry_gate.
+        "price_change_m5": _to_float((attrs.get("price_change_percentage") or {}).get("m5")),
+        "price_change_h1": _to_float((attrs.get("price_change_percentage") or {}).get("h1")),
+        "tx_count_h1": _tx_count(attrs.get("transactions"), "h1"),
         "created_at": _parse_iso_timestamp(attrs.get("pool_created_at")),
         "other_token_address": other_addr,
         "_raw": pool,
@@ -161,4 +168,13 @@ def _to_float(value) -> Optional[float]:
     try:
         return float(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _tx_count(transactions, window: str) -> Optional[int]:
+    """buys + sells for one window (e.g. "h1"); None when absent."""
+    try:
+        w = transactions[window]
+        return int(w["buys"]) + int(w["sells"])
+    except (KeyError, TypeError, ValueError):
         return None

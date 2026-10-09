@@ -82,9 +82,11 @@ Semua threshold dikonfigurasi lewat environment variable, default di
   | Metrik | Minimum default | Env var |
   |---|---|---|
   | TVL pool | ≥ $10.000 | `MIN_POOL_TVL` |
-  | Volume 24h / TVL | ≥ 2x | `MIN_VOL_TVL_RATIO` |
-  | Fee 24h / TVL | ≥ 10%/hari | `MIN_FEE_TVL_PCT` |
-  | Base fee tier | ≥ 2% | `MIN_BASE_FEE_PCT` (sudah ada sebelumnya) |
+  | Volume 24h (absolut) | ≥ $100.000 | `MIN_POOL_VOLUME_24H` |
+  | Fee 24h / TVL | ≥ 10% (0.1x) | `MIN_FEE_TVL_PCT` |
+
+  (Base fee tier & rasio Vol/TVL bukan lagi hard filter — digantikan
+  kriteria di atas dan entry gate di bawah. Fee Tier tetap ditampilkan.)
 
   Sama seperti filter lain di bot ini: field yang datanya tidak tersedia
   dari API manapun (mis. Krystal tidak pernah punya timestamp umur pool)
@@ -128,22 +130,29 @@ Semua threshold dikonfigurasi lewat environment variable, default di
     Krystal, DexPaprika, Alchemy) yang menyediakan `price_change_24h` —
     lihat "Phase 2 backlog" di bawah.
 
-- **Gate terakhir sebelum kirim — spike volume 5 menit** (`main.py`, bukan
-  bagian dari `screener.py`): token yang lolos Gate A+B masih harus lolos
-  cek "volume deras" — volume 5 menit terakhir (dari GeckoTerminal) harus
-  ≥ `MIN_VOL_5M` (default $10.000) **dan** ≥ `VOL_5M_SPIKE_MULTIPLIER`x
-  (default 1.5x) rata-rata volume per-5-menit token itu sendiri.
-  - **Bypass**: kalau pool-nya sudah kebukti "kencang" secara 24 jam lewat
-    Vol/TVL ≥ `SPIKE_BYPASS_VOL_TVL_PCT` (default 500%, alias 5x) **dan**
-    Fee/TVL ≥ `SPIKE_BYPASS_FEE_TVL_PCT` (default 10%/hari), cek spike
-    5-menit ini di-skip total — pool kayak CEREBRO (Vol/TVL 6.96x, Fee/TVL
-    13.91%/hari) sudah kebukti aktif secara harian, jadi tidak boleh
-    ketinggalan notif cuma karena momen 5 menit spesifik yang dicek pas
-    lagi sepi.
-  - Default sebelumnya ($50.000 + 3x) ternyata kelewat ketat — bahkan pool
-    sekelas CEREBRO (TVL ~$101.7K) nyaris tidak pernah punya volume $50K
-    dalam SATU window 5 menit (itu setara muter setengah TVL-nya tiap 5
-    menit).
+- **Entry gate sebelum kirim** (`screener.passes_entry_gate`, dipanggil
+  dari `main.py`): replika 1:1 rule "Enter" di platform trading kamu —
+  SEMUA harus terpenuhi (AND), dan **unknown = ditolak** (fail-closed,
+  pengecualian disengaja dari prinsip graceful-skip bot ini):
+
+  | Kriteria | Default | Env var |
+  |---|---|---|
+  | Pool TVL | ≥ $10.000 | `MIN_POOL_TVL` |
+  | Volume 24h | ≥ $100.000 | `MIN_POOL_VOLUME_24H` |
+  | Fee/TVL 1 jam | ≥ 0,5% (0.005x) | `ENTRY_MIN_1H_FEE_TVL_PCT` |
+  | Trades 1 jam | ≥ 10 | `ENTRY_MIN_1H_TRADES` |
+  | Price change 1 jam | -30% s/d +50% | `ENTRY_MIN_/MAX_1H_PRICE_CHANGE_PCT` |
+  | Fee/TVL 24 jam | ≥ 10% (0.1x) | `MIN_FEE_TVL_PCT` |
+  | Pullback dari high | ≤ 30% | `ENTRY_MAX_PULLBACK_FROM_HIGH_PCT` |
+  | Price change 5 menit | ≥ -3% | `ENTRY_MIN_5M_PRICE_CHANGE_PCT` |
+
+  Metrik 1 jam/5 menit hanya ada di GeckoTerminal (free tier 30 req/min),
+  jadi dicek di kandidat yang sudah menyempit (maks
+  `MAX_SPIKE_CHECK_CANDIDATES` per run); 1h fee = volume 1h × fee tier.
+  **Catatan pullback**: tidak ada API terintegrasi yang kasih "24h high",
+  jadi dihitung dari ATH market cap GMGN (ATH ≥ high 24h → pembacaan yang
+  lebih ketat); token tanpa data ATH ditolak. Spike-check 5 menit lama
+  dan bypass CEREBRO sudah dihapus.
 
 ## Phase 2 backlog
 

@@ -61,48 +61,39 @@ REQUIRE_ATH_BREAK = os.environ.get("REQUIRE_ATH_BREAK", "false").lower() == "tru
 
 # --- Layer 2: Fees & Volume ---
 MIN_FEES = _env_float("MIN_FEES", 0.1)  # native token units (ETH)
-# No longer a hard filter (see MIN_VOL_5M below) — GMGN's "volume_1h" is
+# No longer a hard filter (see the entry gate below) — GMGN's "volume_1h" is
 # only real for token_signal candidates; hot_searches/rank fall back to a
 # generic, un-windowed "volume" field, making this an unreliable gate.
 # Kept for display/scoring only.
 MIN_VOL_1H = _env_float("MIN_VOL_1H", 50_000)
 MIN_LIQUIDITY = _env_float("MIN_LIQUIDITY", 10_000)
-# Real "volume deras" hard gate: last-5-minute volume must show an actual
-# spike, not just a healthy-looking 1h/24h aggregate. Checked at send time
-# via GeckoTerminal (the only source with real m5 granularity —
-# GMGN/DexPaprika don't expose it), on the same call already made there
-# for final-pass enrichment, so it costs no extra API budget.
-# Two parts, per the user's own framing ("intinya ada spike volume tinggi
-# dibanding rata-rata volume yang diterima tokennya" — the point is a
-# spike relative to the token's own average, not just a big number):
-# - MIN_VOL_5M: absolute floor in USD, always required. Loosened again
-#   from $50K to $10K — CEREBRO (a real pool the user pointed to as the
-#   target quality bar: TVL ~$101.7K, 30m volume ~$70.8K) implies a
-#   normal 5-min window well under $50K most of the time; requiring $50K
-#   in 5 minutes means turning over half the pool's whole TVL every 5
-#   minutes, an unreasonably high bar for a genuinely good but not
-#   pump-like pool.
-# - VOL_5M_SPIKE_MULTIPLIER: the real "spike" signal — m5 volume must be
-#   at least Nx the pool's own hourly-average 5-min rate (h1 volume / 12,
-#   from the same GeckoTerminal pool object). Loosened from 3x to 1.5x for
-#   the same reason. Graceful when h1 data is missing (falls back to the
-#   floor alone) since it's a refinement on top of the floor, not a
-#   separate hard requirement.
-# Both fail closed on volume_5m itself: unknown 5m volume never passes —
-# UNLESS the pool already proved itself via SPIKE_BYPASS_* below.
-MIN_VOL_5M = _env_float("MIN_VOL_5M", 10_000)
-VOL_5M_SPIKE_MULTIPLIER = _env_float("VOL_5M_SPIKE_MULTIPLIER", 1.5)
-# Bypass for the 5-minute spike gate: a pool whose own 24h Vol/TVL and
-# Fee/TVL (from screener._compute_pool_ratios, already computed — no extra
-# API calls) already show CEREBRO-level SUSTAINED activity doesn't need to
-# also clear a noisy, punishing 5-minute snapshot to prove it's "kencang".
-# Real case: CEREBRO itself (Vol/TVL 6.96x, Fee/TVL 13.91%/day) comfortably
-# clears both of these, so it alerts even in a 5-minute window with little
-# GeckoTerminal-visible activity right that instant — a real, proven pool
-# shouldn't be missed just because the specific 5 minutes it got checked in
-# happened to be quiet.
-SPIKE_BYPASS_VOL_TVL_PCT = _env_float("SPIKE_BYPASS_VOL_TVL_PCT", 500)  # 5x
-SPIKE_BYPASS_FEE_TVL_PCT = _env_float("SPIKE_BYPASS_FEE_TVL_PCT", 10)
+# --- Entry gate: the user's own rule set, enforced 1:1 as a hard AND ---
+# Mirrors the "Enter" filter list the user configured on their trading
+# platform ("candidates must match ALL"):
+#   pool TVL >= $10K AND 24h volume >= $100K AND 1h fee/TVL >= 0.005x AND
+#   1h trades >= 10 AND -30% <= 1h price change <= 50% AND 24h fee/TVL >=
+#   0.1x AND 24h pullback from the high <= 30% AND 5m price change >= -3%
+# Split across two stages for API-budget reasons (see screener.py):
+#  - TVL / 24h volume / 24h fee-TVL are computable for EVERY candidate from
+#    the cheap Krystal/DexPaprika data -> enforced in filter_pool_layer1.
+#  - The 1h / 5m metrics only exist in GeckoTerminal (30 req/min free tier),
+#    so they're enforced by screener.passes_entry_gate on the already
+#    narrowed candidate list at send time (capped by
+#    MAX_SPIKE_CHECK_CANDIDATES), replacing the old volume-5m spike check
+#    and its CEREBRO bypass entirely.
+# Unlike the rest of this bot, passes_entry_gate FAILS CLOSED on unknown
+# data: per explicit instruction an alert must only fire when every
+# criterion is verifiably true.
+MIN_POOL_VOLUME_24H = _env_float("MIN_POOL_VOLUME_24H", 100_000)
+ENTRY_MIN_1H_FEE_TVL_PCT = _env_float("ENTRY_MIN_1H_FEE_TVL_PCT", 0.5)  # 0.005x
+ENTRY_MIN_1H_TRADES = _env_int("ENTRY_MIN_1H_TRADES", 10)
+ENTRY_MIN_1H_PRICE_CHANGE_PCT = _env_float("ENTRY_MIN_1H_PRICE_CHANGE_PCT", -30)
+ENTRY_MAX_1H_PRICE_CHANGE_PCT = _env_float("ENTRY_MAX_1H_PRICE_CHANGE_PCT", 50)
+# Approximated as the drop from GMGN's token-level ATH market cap (no API
+# here exposes a true 24h high) — ATH >= 24h high, so this is the stricter
+# reading: anything failing it would also fail a real 24h-high check.
+ENTRY_MAX_PULLBACK_FROM_HIGH_PCT = _env_float("ENTRY_MAX_PULLBACK_FROM_HIGH_PCT", 30)
+ENTRY_MIN_5M_PRICE_CHANGE_PCT = _env_float("ENTRY_MIN_5M_PRICE_CHANGE_PCT", -3)
 # Demoted from a hard filter (was the #1 rejection reason in live runs —
 # 130/151 candidates in one run — and actively worked against the
 # "organic volume" goal by requiring a pump-like price spike rather than
@@ -129,9 +120,8 @@ MIN_POOL_TVL = _env_float("MIN_POOL_TVL", 10_000)
 # pairing; only a total lack of pool data (no_eligible_quote_pair) still
 # fails closed. QUOTE_ADDRESS_SYMBOLS below is kept purely to resolve a
 # friendly display symbol when the quote asset's address is recognized.
-# Hard filter: reject the token if its best pool's fee tier is known and
-# below this. Unknown fee tier (API didn't return one) does NOT reject —
-# same graceful-N/A rule as every other filter in this bot.
+# Display-only now (Fee Tier badge): the entry gate's fee/TVL yield
+# criteria replaced the old fee-tier hard filter.
 MIN_BASE_FEE_PCT = _env_float("MIN_BASE_FEE_PCT", 2.0)
 
 # Fallback quote-asset resolution when Krystal/DexPaprika pool lookups fail
@@ -197,9 +187,8 @@ MIN_FEES_TVL_24H_REQUIRED = os.environ.get("MIN_FEES_TVL_24H_REQUIRED", "false")
 # both sourced from the same DexPaprika endpoint that's been repeatedly
 # observed 429-failing for real, otherwise-qualifying candidates (NTF,
 # MAST) — hard-requiring it punished missing data as if it were bad
-# data. The volume_5m spike gate below (MIN_VOL_5M, checked via
-# GeckoTerminal right before sending) is now the real "volume deras"
-# hard gate instead.
+# data. The entry gate (screener.passes_entry_gate, checked via
+# GeckoTerminal right before sending) is the real hard gate instead.
 MIN_VOL_TVL_24H_PCT = _env_float("MIN_VOL_TVL_24H_PCT", 5)
 MIN_VOL_TVL_24H_REQUIRED = os.environ.get("MIN_VOL_TVL_24H_REQUIRED", "false").lower() == "true"
 
@@ -223,7 +212,6 @@ MIN_VOL_TVL_24H_REQUIRED = os.environ.get("MIN_VOL_TVL_24H_REQUIRED", "false").l
 # screener.enrich_layer3_tags) so the user can judge for themselves.
 MIN_POOL_AGE_DAYS = _env_float("MIN_POOL_AGE_DAYS", 7)
 NEW_POOL_WARNING_DAYS = _env_float("NEW_POOL_WARNING_DAYS", 1)
-MIN_VOL_TVL_RATIO = _env_float("MIN_VOL_TVL_RATIO", 2)
 MIN_FEE_TVL_PCT = _env_float("MIN_FEE_TVL_PCT", 10)
 # Layer 2 (sibling selection): among a token's sibling pools (same token,
 # different fee tiers), a candidate whose 24h volume is below this fraction
@@ -254,7 +242,7 @@ COOLDOWN_CACHE_PATH = os.environ.get("COOLDOWN_CACHE_PATH", "cooldown_cache.json
 # update_id, persisted across runs the same way as the cooldown cache.
 BOT_STATE_PATH = os.environ.get("BOT_STATE_PATH", "bot_state.json")
 
-# Safety cap on how many cooldown-cleared candidates the volume-5m spike
+# Safety cap on how many cooldown-cleared candidates the entry-gate
 # check (main.py) will walk through GeckoTerminal in one run. Without a
 # cap, a run with many passing candidates (loosened filters mean this can
 # be dozens now) could take long enough to risk overlapping the next

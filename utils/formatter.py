@@ -93,16 +93,6 @@ def now_wib_str() -> str:
     return datetime.now(WIB).strftime("%d %b %Y, %H:%M WIB")
 
 
-def _fmt_spike_ratio(vol_5m: Optional[float], baseline: Optional[float]) -> str:
-    if vol_5m is None:
-        return "N/A"
-    if not baseline:
-        return "N/A (no baseline)"
-    ratio = vol_5m / baseline
-    mark = CHECK if ratio >= config.VOL_5M_SPIKE_MULTIPLIER else CROSS
-    return f"{ratio:.1f}x avg {mark}"
-
-
 def _fmt_sibling_line(sibling_count: Optional[int], sibling_ratio: Optional[float]) -> str:
     """Layer 2 sibling-selection result: how many other fee-tier pools this
     token had, and how this pool's volume compared to the busiest one."""
@@ -161,7 +151,11 @@ def build_alert_message(token: dict) -> str:
     tvl = token.get("pool_tvl") or token.get("liquidity")
     fees_tvl_pct = token.get("fees_tvl_24h_pct")
     vol_tvl_pct = token.get("vol_tvl_24h_pct")
-    price_change_1h = token.get("price_change_1h")
+    chg_5m = token.get("pool_price_change_5m")
+    chg_1h = token.get("pool_price_change_1h")
+    fee_tvl_1h = token.get("fee_tvl_1h_pct")
+    trades_1h = token.get("trades_1h")
+    pullback = token.get("pullback_from_high_pct")
     fee_tier_pct = token.get("fee_tier_pct")
 
     is_wash_trading = token.get("is_wash_trading")
@@ -213,8 +207,7 @@ def build_alert_message(token: dict) -> str:
         "━━━━━━━━━━━━━━━━━━━━━",
         f"Market Cap  : {fmt_usd(mcap)} {_mark(mcap, mcap is not None and config.MIN_MCAP <= mcap <= config.MAX_MCAP)}",
         f"Price       : {fmt_price(price)}",
-        f"Volume (5m) : {fmt_usd(token.get('volume_5m'))} {_mark(token.get('volume_5m'), token.get('volume_5m') is not None and token.get('volume_5m') >= config.MIN_VOL_5M)}",
-        f"Vol Spike   : {_fmt_spike_ratio(token.get('volume_5m'), token.get('volume_5m_baseline'))}",
+        f"Volume (5m) : {fmt_usd(token.get('volume_5m'))}",
         f"Volume (1h) : {fmt_usd(vol_1h)}",
         f"Volume (6h) : {fmt_usd(token.get('volume_6h'))}",
         f"Liquidity   : {fmt_usd(liquidity)}",
@@ -235,9 +228,13 @@ def build_alert_message(token: dict) -> str:
         "━━━━━━━━━━━━━━━━━━━━━",
         f"Pool Age    : {fmt_age_days(token.get('pool_age_days'))}",
         f"TVL         : {fmt_usd(tvl)} {_mark(tvl, tvl is not None and tvl >= config.MIN_LIQUIDITY)}",
-        f"Fees/TVL 24h: {fmt_pct_plain(fees_tvl_pct)} {_mark(fees_tvl_pct, fees_tvl_pct is not None and fees_tvl_pct >= config.MIN_FEES_TVL_24H_PCT)}",
+        f"Fees/TVL 24h: {fmt_pct_plain(fees_tvl_pct)} {_mark(fees_tvl_pct, fees_tvl_pct is not None and fees_tvl_pct >= config.MIN_FEE_TVL_PCT)}",
         f"Vol/TVL 24h : {fmt_pct_plain(vol_tvl_pct)} {_mark(vol_tvl_pct, vol_tvl_pct is not None and vol_tvl_pct >= config.MIN_VOL_TVL_24H_PCT)}",
-        f"Price Chg 1h: {fmt_pct(price_change_1h)} {_mark(price_change_1h, price_change_1h is not None and price_change_1h >= config.MIN_PRICE_CHANGE_1H_PCT)}",
+        f"Price Chg 5m: {fmt_pct(chg_5m)} {_mark(chg_5m, chg_5m is not None and chg_5m >= config.ENTRY_MIN_5M_PRICE_CHANGE_PCT)}",
+        f"Price Chg 1h: {fmt_pct(chg_1h)} {_mark(chg_1h, chg_1h is not None and config.ENTRY_MIN_1H_PRICE_CHANGE_PCT <= chg_1h <= config.ENTRY_MAX_1H_PRICE_CHANGE_PCT)}",
+        f"Fees/TVL 1h : {fmt_pct_plain(fee_tvl_1h)} {_mark(fee_tvl_1h, fee_tvl_1h is not None and fee_tvl_1h >= config.ENTRY_MIN_1H_FEE_TVL_PCT)}",
+        f"Trades 1h   : {fmt_int(trades_1h)} {_mark(trades_1h, trades_1h is not None and trades_1h >= config.ENTRY_MIN_1H_TRADES)}",
+        f"Pullback Hi : {fmt_pct_plain(pullback)} {_mark(pullback, pullback is not None and pullback <= config.ENTRY_MAX_PULLBACK_FROM_HIGH_PCT)}",
         f"Avg Fees/Min: {fmt_usd(token.get('avg_fees_per_min'))}",
         f"Avg Vol/Min : {fmt_usd(token.get('avg_vol_per_min'))}",
         f"Pool Count  : {fmt_int(pool_count)} {_mark(pool_count, pool_count is not None and pool_count <= config.MAX_POOL_COUNT)}",

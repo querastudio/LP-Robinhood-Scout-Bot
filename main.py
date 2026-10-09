@@ -78,37 +78,28 @@ async def run() -> None:
             continue
         candidates.append(token)
 
-    # Real "volume deras" hard gate: last-5-minute volume must clear an
-    # absolute floor (config.MIN_VOL_5M) AND show a real spike relative to
-    # the token's own average activity (config.VOL_5M_SPIKE_MULTIPLIER x
-    # its hourly-average 5-min rate) — per the user's framing, the relative
-    # spike is the real point, the floor just a sanity backstop. Checked
-    # via GeckoTerminal, the only source with true m5 granularity. Walks
-    # every cooldown-cleared candidate (not just the first MAX_ALERTS_RUN)
-    # so a token that fails the spike check doesn't consume an alert slot;
-    # fails closed on volume_5m itself (no GeckoTerminal data = skipped),
-    # but gracefully skips the relative check when no h1 baseline exists.
-    #
-    # Bypassed entirely for a pool already proven "kencang" by its own 24h
-    # Vol/TVL + Fee/TVL (screener.is_proven_by_pool_quality) — a real,
-    # sustained CEREBRO-style pool shouldn't be missed just because the
-    # specific 5-minute window it got checked in happened to be quiet.
-    skipped_no_spike = 0
+    # Entry gate: the user's full rule set (TVL, 24h volume, 1h fee/TVL, 1h
+    # trades, 1h/5m price change, 24h fee/TVL, pullback from high) must ALL
+    # be verifiably true — see screener.passes_entry_gate. Uses
+    # GeckoTerminal's pool object (the only source with 1h/5m granularity),
+    # so only the first MAX_SPIKE_CHECK_CANDIDATES cooldown-cleared
+    # candidates are checked per run (free tier is 30 req/min). A token
+    # that fails doesn't consume an alert slot.
+    skipped_entry_gate = 0
     to_alert = []
     if candidates:
         gt_client = GeckoTerminalClient()
         try:
             for token in candidates[: config.MAX_SPIKE_CHECK_CANDIDATES]:
                 await screener.enrich_with_geckoterminal(gt_client, token)
-                if not screener.is_proven_by_pool_quality(token):
-                    vol_5m = token.get("volume_5m")
-                    if vol_5m is None or vol_5m < config.MIN_VOL_5M:
-                        skipped_no_spike += 1
-                        continue
-                    baseline = token.get("volume_5m_baseline")
-                    if baseline and vol_5m < config.VOL_5M_SPIKE_MULTIPLIER * baseline:
-                        skipped_no_spike += 1
-                        continue
+                passed, failed = screener.passes_entry_gate(token)
+                if not passed:
+                    skipped_entry_gate += 1
+                    logger.info(
+                        "Entry gate rejected %s: %s",
+                        token.get("symbol") or token.get("address"), ",".join(failed),
+                    )
+                    continue
                 to_alert.append(token)
                 if len(to_alert) >= config.MAX_ALERTS_RUN:
                     break
@@ -134,8 +125,8 @@ async def run() -> None:
 
     cooldown.save(cd_state)
     logger.info(
-        "Run complete: scanned=%d passing=%d sent=%d skipped_cooldown=%d skipped_no_spike=%d",
-        total_scanned, len(passing), sent_count, skipped_cooldown, skipped_no_spike,
+        "Run complete: scanned=%d passing=%d sent=%d skipped_cooldown=%d skipped_entry_gate=%d",
+        total_scanned, len(passing), sent_count, skipped_cooldown, skipped_entry_gate,
     )
 
 

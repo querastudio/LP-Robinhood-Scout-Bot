@@ -43,9 +43,9 @@ def test_layer1_rejects_low_tvl():
     assert not passed and reason == "pool_tvl"
 
 
-def test_layer1_rejects_low_vol_tvl_ratio():
-    passed, reason = screener.filter_pool_layer1(_pool(volume_24h=50_000))  # ratio 0.5x < min 2x
-    assert not passed and reason == "vol_tvl_ratio"
+def test_layer1_rejects_low_volume_24h():
+    passed, reason = screener.filter_pool_layer1(_pool(volume_24h=50_000))
+    assert not passed and reason == "volume_24h"
 
 
 def test_layer1_rejects_low_fee_tvl_pct():
@@ -53,9 +53,9 @@ def test_layer1_rejects_low_fee_tvl_pct():
     assert not passed and reason == "fee_tvl_pct"
 
 
-def test_layer1_rejects_low_base_fee():
-    passed, reason = screener.filter_pool_layer1(_pool(fee_tier_pct=0.3))
-    assert not passed and reason == "base_fee"
+def test_layer1_does_not_reject_on_fee_tier():
+    passed, _ = screener.filter_pool_layer1(_pool(fee_tier_pct=0.3))
+    assert passed
 
 
 def test_layer1_skips_missing_age_gracefully():
@@ -95,11 +95,11 @@ def test_enrich_layer3_tags_no_warning_for_established_pool():
 
 def test_cerebro_sibling_case():
     """The PRD's required acceptance case: a 2.08% fee-tier pool with a
-    thin ~$25K/day volume vs a 2.1% tier with $707.8K volume (ratio well
+    thin ~$120K/day volume (the $100K floor means CEREBRO's real $11K sibling would now fail Layer 1 outright) vs a 2.1% tier with $707.8K volume (ratio well
     under 50%) — the thin pool must lose via the jomplang check even
     though it clears Layer 1 fine on its own (smaller pool, but still over
     every Layer 1 minimum), and the busy 2.1% pool must win."""
-    thin = _pool(tvl_usd=10_000, fee_tier_pct=2.08, volume_24h=25_000, fees_24h_usd=1_200)
+    thin = _pool(tvl_usd=10_000, fee_tier_pct=2.08, volume_24h=120_000, fees_24h_usd=2_400)
     busy = _pool(tvl_usd=100_000, fee_tier_pct=2.1, volume_24h=707_800, fees_24h_usd=14_863.8)
 
     winner = screener.select_best_sibling([thin, busy])
@@ -145,21 +145,53 @@ def test_no_candidates_clear_layer1_returns_none():
     assert screener.select_best_sibling([only_bad_pool]) is None
 
 
-def test_is_proven_by_pool_quality_cerebro_case():
-    """CEREBRO's real numbers (Vol/TVL 6.96x, Fee/TVL 13.91%/day) should
-    bypass the 5-minute spike gate entirely."""
-    token = {"vol_tvl_24h_pct": 696.0, "fees_tvl_24h_pct": 13.91}
-    assert screener.is_proven_by_pool_quality(token) is True
+def _entry_token(**overrides) -> dict:
+    """A token satisfying every entry criterion by default."""
+    base = {
+        "pool_tvl": 100_000, "vol_24h_usd": 700_000, "fee_tier_pct": 2.0,
+        "vol_1h_usd": 60_000,            # 60K * 2% / 100K = 1.2% 1h fee/TVL
+        "trades_1h": 120,
+        "pool_price_change_1h": 10.0, "pool_price_change_5m": 0.5,
+        "fees_tvl_24h_pct": 14.0,
+        "ath_market_cap": 1_000_000, "market_cap": 900_000,  # 10% pullback
+    }
+    base.update(overrides)
+    return base
 
 
-def test_is_proven_by_pool_quality_rejects_weak_pool():
-    token = {"vol_tvl_24h_pct": 120.0, "fees_tvl_24h_pct": 2.0}
-    assert screener.is_proven_by_pool_quality(token) is False
+def test_entry_gate_passes_when_all_criteria_met():
+    passed, failed = screener.passes_entry_gate(_entry_token())
+    assert passed and failed == []
 
 
-def test_is_proven_by_pool_quality_missing_data_never_bypasses():
-    assert screener.is_proven_by_pool_quality({}) is False
-    assert screener.is_proven_by_pool_quality({"vol_tvl_24h_pct": 900.0}) is False
+def test_entry_gate_each_criterion_fails_individually():
+    cases = {
+        "tvl": {"pool_tvl": 9_000},
+        "volume_24h": {"vol_24h_usd": 99_000},
+        "fee_tvl_1h": {"vol_1h_usd": 10_000},        # 0.2% < 0.5%
+        "trades_1h": {"trades_1h": 9},
+        "price_change_1h": {"pool_price_change_1h": 55.0},
+        "fee_tvl_24h": {"fees_tvl_24h_pct": 9.0},
+        "pullback_from_high": {"market_cap": 600_000},  # 40% pullback
+        "price_change_5m": {"pool_price_change_5m": -3.5},
+    }
+    for reason, override in cases.items():
+        passed, failed = screener.passes_entry_gate(_entry_token(**override))
+        assert not passed and failed == [reason], f"{reason}: got {failed}"
+
+
+def test_entry_gate_price_change_1h_lower_bound():
+    passed, failed = screener.passes_entry_gate(_entry_token(pool_price_change_1h=-31.0))
+    assert not passed and "price_change_1h" in failed
+
+
+def test_entry_gate_fails_closed_on_missing_data():
+    passed, failed = screener.passes_entry_gate({})
+    assert not passed
+    assert set(failed) == {
+        "tvl", "volume_24h", "fee_tvl_1h", "trades_1h", "price_change_1h",
+        "fee_tvl_24h", "pullback_from_high", "price_change_5m",
+    }
 
 
 def _run_all() -> None:

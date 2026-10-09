@@ -249,6 +249,8 @@ BOT_STATE_PATH = os.environ.get("BOT_STATE_PATH", "bot_state.json")
 # 5-minute cron cycle — GeckoTerminal's free tier is 30 req/min, so even
 # 20 candidates here is a real chunk of a run's time budget.
 MAX_SPIKE_CHECK_CANDIDATES = _env_int("MAX_SPIKE_CHECK_CANDIDATES", 15)
+# Min seconds between GeckoTerminal calls (free tier: 30 req/min).
+GECKOTERMINAL_MIN_INTERVAL_SEC = _env_float("GECKOTERMINAL_MIN_INTERVAL_SEC", 2.1)
 
 # GMGN rate limit: leaky bucket 20 req/s. Keep comfortably under.
 GMGN_MAX_REQ_PER_SEC = _env_int("GMGN_MAX_REQ_PER_SEC", 10)

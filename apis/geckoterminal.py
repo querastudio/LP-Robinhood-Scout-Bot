@@ -18,8 +18,10 @@ yet confirmed against a live raw response — DEBUG_API_RAW logging is
 included here so the first live GitHub Actions run can validate them, per
 this project's rule of never trusting an unvalidated schema.
 """
+import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -38,6 +40,25 @@ class GeckoTerminalClient:
             headers={"accept": "application/json"},
         )
         self._owns_client = client is None
+        self._lock = asyncio.Lock()
+        self._last_call = 0.0
+
+    async def _get(self, path: str, params: dict):
+        """Paced GET (free tier is 30 req/min -> >= 2.1s apart) with one
+        retry after a 429 — live runs showed bursts of 429s otherwise."""
+        for attempt in range(2):
+            async with self._lock:
+                wait = config.GECKOTERMINAL_MIN_INTERVAL_SEC - (time.monotonic() - self._last_call)
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                self._last_call = time.monotonic()
+                resp = await self._client.get(path, params=params)
+            if resp.status_code == 429 and attempt == 0:
+                await asyncio.sleep(config.GECKOTERMINAL_MIN_INTERVAL_SEC * 2)
+                continue
+            resp.raise_for_status()
+            return resp
+        resp.raise_for_status()
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -45,11 +66,10 @@ class GeckoTerminalClient:
 
     async def get_token_pools(self, token_address: str) -> list[dict]:
         try:
-            resp = await self._client.get(
+            resp = await self._get(
                 f"/networks/{config.DEXPAPRIKA_NETWORK}/tokens/{token_address}/pools",
-                params={"page": 1},
+                {"page": 1},
             )
-            resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPError as e:
             logger.info("GeckoTerminal pools lookup failed for %s: %s", token_address, e)
@@ -68,6 +88,39 @@ class GeckoTerminalClient:
             logger.info("RAW GeckoTerminal /pools first result for %s: %s", token_address, text)
 
         return items
+
+    async def get_pool_ohlcv_hourly(self, pool_address: str, limit: int = 24) -> list:
+        """Last `limit` hourly candles (newest first), [] on any failure.
+        Confirmed live: ohlcv_list rows are [ts, open, high, low, close, volume]."""
+        try:
+            resp = await self._get(
+                f"/networks/{config.DEXPAPRIKA_NETWORK}/pools/{pool_address}/ohlcv/hour",
+                {"limit": limit},
+            )
+            return resp.json()["data"]["attributes"]["ohlcv_list"] or []
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+            logger.info("GeckoTerminal OHLCV lookup failed for %s: %s", pool_address, e)
+            return []
+
+
+def _pool_short_address(pool_id: Optional[str]) -> Optional[str]:
+    """GeckoTerminal pool ids look like "robinhood_0xabc..." — strip the network prefix."""
+    if not pool_id:
+        return None
+    return pool_id.split("_", 1)[1] if "_" in pool_id else pool_id
+
+
+def pullback_from_ohlcv(candles: list) -> Optional[float]:
+    """% drop from the highest high across the candles to the newest close.
+    Candles are [ts, open, high, low, close, volume], newest first."""
+    try:
+        high = max(float(c[2]) for c in candles)
+        latest_close = float(candles[0][4])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if high <= 0:
+        return None
+    return max(0.0, (high - latest_close) / high * 100)
 
 
 def _parse_iso_timestamp(value) -> Optional[float]:
@@ -132,7 +185,7 @@ def normalize_pool(pool: dict, token_address: str) -> dict:
                 quote_symbol = parts[0]
 
     return {
-        "pool_address": pool.get("id"),
+        "pool_address": _pool_short_address(pool.get("id")),
         "dex": dex_id,
         "quote_symbol": quote_symbol,
         "tvl_usd": tvl_usd,

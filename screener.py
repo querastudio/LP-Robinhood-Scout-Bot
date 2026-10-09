@@ -338,9 +338,13 @@ def select_best_sibling(pools: list[dict]) -> Optional[dict]:
 
 
 def _ath_pullback_pct(token: dict) -> Optional[float]:
-    """Drop from GMGN's token-level ATH market cap to the current one, in %.
-    Stand-in for "24h pullback from the high" (no integrated API exposes a
-    true 24h high); ATH >= 24h high, so it is the stricter reading."""
+    """Pullback from the 24h high, in %. Prefers the real figure computed
+    from GeckoTerminal hourly OHLCV (token["pullback_24h_pct"], fetched by
+    fetch_pullback_24h); falls back to the drop from GMGN's token-level ATH
+    market cap, which is a stricter stand-in since ATH >= 24h high."""
+    real = token.get("pullback_24h_pct")
+    if real is not None:
+        return real
     ath = token.get("ath_market_cap")
     mcap = token.get("market_cap")
     if not ath or mcap is None or ath <= 0:
@@ -490,6 +494,7 @@ def _apply_geckoterminal_enrichment(token: dict, best: dict) -> None:
     # whether activity is sustained or a one-off blip).
     token["volume_6h"] = best.get("volume_6h")
     token["vol_1h_usd"] = best.get("volume_1h_pool")
+    token["gt_pool_address"] = best.get("pool_address")
     token["pool_price_change_5m"] = best.get("price_change_m5")
     token["pool_price_change_1h"] = best.get("price_change_h1")
     token["trades_1h"] = best.get("tx_count_h1")
@@ -503,6 +508,16 @@ def _apply_geckoterminal_enrichment(token: dict, best: dict) -> None:
         if age is not None:
             token["pool_age_days"] = age
     _compute_pool_ratios(token)
+
+
+async def fetch_pullback_24h(gt_client: geckoterminal.GeckoTerminalClient, token: dict) -> None:
+    """One extra GeckoTerminal call (hourly OHLCV of the best pool), made only
+    for tokens that already passed every other entry criterion."""
+    pool_address = token.get("gt_pool_address")
+    if not pool_address:
+        return
+    candles = await gt_client.get_pool_ohlcv_hourly(pool_address)
+    token["pullback_24h_pct"] = geckoterminal.pullback_from_ohlcv(candles) if candles else None
 
 
 async def enrich_with_geckoterminal(gt_client: geckoterminal.GeckoTerminalClient, token: dict) -> None:

@@ -1,15 +1,16 @@
-name: Robinhood Scout Bot
+name: LP Scout Robinhood
 
-# Touch: force GitHub Actions to (re-)register this workflow file.
+# Mode sekali jalan: tiap tick memproses perintah Telegram, lalu scan bila sudah
+# SCAN_MINUTES sejak scan terakhir. cron-job.org dapat memicu workflow_dispatch
+# (lebih andal daripada schedule: GitHub sering men-drop cron 5 menit).
 on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
-    inputs:
-      send_test_alert:
-        description: "Kirim contoh notifikasi (preview format) tanpa scan sungguhan"
-        type: boolean
-        default: false
+
+concurrency:
+  group: lp-scout
+  cancel-in-progress: false
 
 jobs:
   scan:
@@ -24,24 +25,15 @@ jobs:
       - run: pip install -r requirements.txt
       - uses: actions/cache@v4
         with:
-          path: |
-            cooldown_cache.json
-            bot_state.json
-          key: cooldown-${{ github.run_id }}
-          restore-keys: cooldown-
-      - name: Send test alert (manual preview only)
-        if: github.event_name == 'workflow_dispatch' && inputs.send_test_alert == true
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python send_test_alert.py
+          path: data
+          key: lp-scout-${{ github.run_id }}
+          restore-keys: lp-scout-
       - name: Run bot
-        if: github.event_name != 'workflow_dispatch' || inputs.send_test_alert != true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          GMGN_API_KEY:       ${{ secrets.GMGN_API_KEY }}
+          TELEGRAM_OWNER_ID:  ${{ secrets.TELEGRAM_OWNER_ID }}
+          RPC_URL:            ${{ secrets.RPC_URL }}
           ALCHEMY_API_KEY:    ${{ secrets.ALCHEMY_API_KEY }}
-          KRYSTAL_API_KEY:    ${{ secrets.KRYSTAL_API_KEY }}
-          KRYSTAL_CHAIN_ID:   ${{ secrets.KRYSTAL_CHAIN_ID }}
+          V4_POOL_MANAGER:    ${{ vars.V4_POOL_MANAGER }}
+          SCAN_MINUTES:       ${{ vars.SCAN_MINUTES }}
         run: python main.py

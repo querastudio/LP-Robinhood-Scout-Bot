@@ -1,7 +1,5 @@
 import asyncio
 
-import pytest
-
 from lpscout import alerts, config, formatter, geckoterminal
 from lpscout.bot import Bot
 from lpscout.models import Analysis, FeeInfo, Security
@@ -222,3 +220,23 @@ def test_scanner_end_to_end_with_mock_gecko(tmp_path):
     for a in res.analyzed:
         if a.security:
             assert a.security.status == "unverified"
+
+
+def test_rpc_on_wrong_chain_is_disabled():
+    class WrongChain:
+        enabled = True
+
+        async def chain_id(self):
+            return 101  # mis. endpoint Solana/lain
+
+    sc = Scanner(S, None, WrongChain(), None)  # type: ignore[arg-type]
+    asyncio.run(sc.ensure_rpc())
+    assert sc.rpc is None
+
+    class Right(WrongChain):
+        async def chain_id(self):
+            return 4663
+
+    sc = Scanner(S, None, Right(), None)  # type: ignore[arg-type]
+    asyncio.run(sc.ensure_rpc())
+    assert sc.rpc is not None

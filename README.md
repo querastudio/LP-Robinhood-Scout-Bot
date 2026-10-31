@@ -1,196 +1,116 @@
-# Robinhood Scout Bot
+# LP Scout Robinhood
 
-Telegram bot yang memindai token/pool di Robinhood Chain (Arbitrum Orbit L2)
-lewat GMGN API + Krystal Cloud API (data pool), dan mengirim notifikasi ke
-Telegram untuk token yang lolos filter.
+Bot Telegram yang **hanya memindai dan merekomendasikan** pool LP *single-sided di bawah harga*
+(range konsentrasi -70%) di Robinhood Chain (EVM, chainId 4663). Tidak memegang private key dan
+tidak membuat transaksi apa pun.
 
-## Status
+> **Ambang label SEMENTARA.** Semua ambang (Ideal/Bagus/Minimal) berasal dari backtest Meteora
+> Solana dan **belum divalidasi di Robinhood**. Riwayat scan disimpan (`data/state.json`) untuk
+> kalibrasi nanti.
 
-Semua sumber data utama sudah **tervalidasi lewat live run** (bukan tebakan):
+## Stack
 
-| Sumber | Status | Dipakai untuk |
+Python 3.11 + `httpx` (async). Tanpa framework bot: Telegram dipanggil langsung lewat Bot API.
+Dua mode jalan:
+
+| Mode | Perintah | Kegunaan |
 |---|---|---|
-| GMGN OpenAPI | ✅ Validated | Market cap, holders, honeypot, ownership renounced, hot search, ATH signal |
-| Krystal Cloud API | ✅ Validated | TVL, fee tier, fees/volume 24h, quote pair (ETH/USDG filter) |
-| Alchemy RPC | ✅ Working | Fallback ownership-renounced check kalau GMGN tidak punya datanya |
-| DexPaprika | ⚠️ Belum tervalidasi | Fallback sekunder kalau Krystal tidak ada data pool untuk token tsb |
+| Sekali jalan | `python main.py` | GitHub Actions / cron (bawaan repo ini). Tiap tick: proses perintah Telegram, lalu scan otomatis bila sudah `SCAN_MINUTES` sejak scan terakhir. |
+| Daemon | `python main.py --daemon` | Long-polling Telegram + scan otomatis di proses sendiri (VPS/Docker). |
+| Uji manual | `python main.py --dry-scan` | Scan nyata, cetak laporan ke stdout (tanpa Telegram/state). |
+
+## Alur data
+
+```
+GeckoTerminal /pools (sort volume 24j, 8 halaman)
+  → saring: pair ada sisi ETH/WETH/stable, TVL ≥ $10K, bukan stabil-stabil/aset besar/DEX V2
+  → fee tier (cache 24j): nama pool → RPC fee() / V4 Initialize
+  → peringkat (volume24h × fee tier)/TVL → 20 kandidat
+  → candle 15m GeckoTerminal (cache 5m) → metrik → label
+  → keamanan token (RPC) hanya untuk yang lolos → label akhir
+```
+
+Semua HTTP/RPC: timeout 10 dtk, retry + backoff, satu antrean global GeckoTerminal
+(≥2,1 dtk/permintaan ≈ 28/menit; retry 429 menunggu lebih lama). Cache: daftar pool 2 menit,
+candle 5 menit, fee tier 24 jam (`data/cache.json`).
+
+### Sumber data & status verifikasi
+
+| Data | Sumber | Status |
+|---|---|---|
+| Daftar pool, TVL, volume, harga, umur | GeckoTerminal `/networks/robinhood/pools?sort=h24_volume_usd_desc` | ✅ terverifikasi live (sort valid: `h24_volume_usd_desc`, `h24_tx_count_desc`; 20 pool/halaman) |
+| Candle 15m | `/pools/{addr}/ohlcv/minute?aggregate=15&limit=100&currency=token` | ✅ terverifikasi live; volume dalam **quote token**, dikali harga quote (USD) — cocok dengan volume 24j pool ±15% pada fixture |
+| Fee tier | Nama pool GeckoTerminal ("… 0.3%") | ✅ ada untuk sebagian pool (V3-style & sebagian V4); **tidak ada** untuk pool V4 tertentu dan DEX "metric" |
+| Fee tier (on-chain) | RPC `fee()` (V3-style), event `Initialize` PoolManager (V4) | ⚠️ kode + tes dengan mock; **belum diuji ke node nyata** (RPC tidak terjangkau dari sandbox pengembangan) |
+| Keamanan token | RPC: bytecode, `owner()`, slot proxy, simulasi beli/jual `eth_simulateV1` | ⚠️ idem, hanya tes mock |
+| Krystal | — | Tidak dipakai: MCP hanya untuk asisten AI; API HTTP-nya butuh key + kredit dan tidak diverifikasi untuk runtime |
+
+Pool yang fee tier-nya **tidak diketahui** tidak dinilai (fee tidak bisa diperkirakan) — bukan ditebak.
+
+## Metrik (`lpscout/metrics.py`, murni & dites)
+
+Per hari, dari 96 candle 15 menit terakhir (slot tanpa transaksi diisi harga sebelumnya):
+
+- `feeYield = fee24h / TVL` — **perkiraan**: `fee24h ≈ volume24h × fee tier × (1 − PROTOCOL_FEE_SHARE)`; tanpa insentif/emisi
+- `sigmaDaily = stdev(log return 15m) × √96`, `lvr = σ²/8`, `lvrRange70 = lvr / (1 − √0,3) ≈ lvr × 2,2`
+- `netEdge = feeYield − lvr` (juga versi range -70%), `feeLvr = feeYield / lvr`
+- `activity` = % candle bertransaksi · `concentration` = candle terbesar ÷ volume 24j · `pace6h` = (vol 6j × 4) ÷ vol 24j
+- Bad print (close menyimpang > 70% dari kedua tetangga) dibuang; < 16 candle → metrik `null` → ditolak ("data kurang")
+
+## Label (`lpscout/labels.py`, ambang di `.env`)
+
+| Label | Fee/TVL | Net edge | Aktivitas | Konsentrasi | Laju 6j | Ukuran |
+|---|---|---|---|---|---|---|
+| ⭐ ideal | ≥ 20% | ≥ 10% | ≥ 90% | < 10% | – | 100% |
+| ✅✅ bagus | ≥ 10% | ≥ 5% | ≥ 90% | < 10% | ≥ 50% | 75% |
+| ✅ minimal | ≥ 5% | ≥ 2% | ≥ 90% | < 10% | ≥ 50% | 50% |
+
+Turun satu tingkat bila TVL < $25.000 atau harga token volatil turun > 50% dalam 24 jam.
+Keamanan gagal (honeypot/pajak transfer/jual gagal) → **tidak pernah** direkomendasikan.
+Fee dinamis/hook V4 ditandai jelas (tier statis tidak dipercaya).
+
+## Keamanan token (`lpscout/security.py`) — batasan jujur
+
+Tanpa router per-DEX yang terverifikasi, simulasi dilakukan tanpa router: `eth_simulateV1`
+menjalankan berurutan `transfer` pool→probe ("beli") dan probe→pool ("jual") lalu membandingkan
+saldo (revert = honeypot; selisih = pajak). Hanya jalan bila node mendukung `eth_simulateV1`;
+bila tidak, hasilnya **"belum terverifikasi"** (tidak pernah ditebak). Tambahan: ada-tidaknya
+kode, selector `mint/blacklist/pause/setTax` di bytecode, `owner()`, proxy EIP-1967. Owner aktif
++ bisa mint = risiko. Konsentrasi holder **belum diperiksa** (belum ada sumber data terverifikasi).
+
+## Perintah Telegram (hanya `TELEGRAM_OWNER_ID`)
+
+`/scan` pindai sekarang · `/top` hasil terakhir · `/pool <alamat>` analisis satu pool (40 hex V3,
+64 hex V4) · `/set [kunci nilai]` lihat/ubah setelan (`scan_minutes`, `min_tvl`, `cooldown_hours`,
+`alert_min_label`, `auto_scan`, `top_candidates`) · `/status` · `/help`. Menu perintah didaftarkan
+otomatis. Tiap handler dibatasi 25 dtk; `/scan` berjalan di latar belakang dan membalas saat selesai.
+
+**Alert otomatis** hanya untuk pool yang *baru lolos* atau *naik label*, cooldown 2 jam per pool
+(`ALERT_COOLDOWN_HOURS`). Pesan maks 3.500 karakter, diakhiri catatan setup single-sided -70%.
 
 ## Setup
 
-1. `pip install -r requirements.txt`
-2. Set secrets di GitHub repo (Settings → Secrets and variables → Actions):
-   - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — wajib
-   - `GMGN_API_KEY` — wajib
-   - `KRYSTAL_API_KEY` — wajib untuk filter pool aktif (daftar di https://cloud.krystal.app)
-   - `ALCHEMY_API_KEY` — opsional (fallback ownership check)
-   - `KRYSTAL_CHAIN_ID` — opsional, default **4663** (chain id Robinhood Chain, terverifikasi via Krystal `/v1/chains` dan dashboard Alchemy)
-3. Jalankan lokal: `python main.py`
-4. Preview format notifikasi tanpa scan sungguhan: `python send_test_alert.py`
+1. `pip install -r requirements.txt` (dev: `requirements-dev.txt`), salin `.env.example` → `.env`.
+2. Isi minimal `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_ID`; untuk fee/keamanan on-chain isi `RPC_URL`
+   (atau `ALCHEMY_API_KEY`) dan, untuk pool V4, `V4_POOL_MANAGER`.
+3. GitHub Actions: tambah secrets `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_ID`, `RPC_URL`/`ALCHEMY_API_KEY`
+   (variabel opsional `V4_POOL_MANAGER`, `SCAN_MINUTES`). Workflow jalan tiap 5 menit; `data/` ikut
+   `actions/cache`. Pemicu andal: cron-job.org → `workflow_dispatch`.
 
-## GitHub Actions
+## Tes & kualitas
 
-Workflow `.github/workflows/robinhood_scout.yml` berjalan tiap 5 menit via
-`schedule:` dan juga mendukung `workflow_dispatch` (dengan input
-`send_test_alert` untuk preview). **Catatan penting**: `schedule:` cron
-GitHub Actions sering di-drop untuk interval sesering 5 menit — setelah bot
-tervalidasi, setup cron eksternal (mis. cron-job.org) yang memanggil
-`workflow_dispatch` API sebagai pemicu utama yang reliable.
+```
+pip install -r requirements-dev.txt
+pytest          # metrik, label, keamanan, fee, cache/retry, parser fixture GeckoTerminal, alert/cooldown, bot
+ruff check .    # lint
+mypy lpscout main.py   # typecheck
+```
 
-Semua filter yang datanya tidak tersedia dari API di-skip secara graceful
-(tampil "N/A" di notifikasi), bot tidak akan crash atau menolak semua token
-karena satu field hilang.
+Fixture payload asli GeckoTerminal ada di `tests/fixtures/` (daftar pool, detail pool, OHLCV).
 
-## Pause / Resume (hemat API call)
+## Belum bisa diverifikasi
 
-Kirim command ini lewat chat Telegram yang sama dengan `TELEGRAM_CHAT_ID`:
-
-- `/pause` (atau `/stop`) — matikan scan. Selama paused, tiap run cuma
-  melakukan satu panggilan `getUpdates` ke Telegram (buat dengar
-  `/resume`) — **tidak** memanggil GMGN, DexPaprika, Krystal, GeckoTerminal,
-  atau Alchemy RPC sama sekali, jadi tidak boros quota/rate-limit.
-- `/resume` (atau `/start`) — nyalakan lagi, scan jalan normal tiap 5 menit.
-- `/status` — cek status saat ini (Running/Paused).
-
-Status paused/resume disimpan di `bot_state.json`, ikut ter-cache antar run
-lewat `actions/cache` (sama seperti `cooldown_cache.json`). Command diproses
-di awal tiap run — bot cuma memproses command yang dikirim dari chat id yang
-sama dengan `TELEGRAM_CHAT_ID`, command dari chat lain diabaikan.
-
-## Threshold / filter
-
-Semua threshold dikonfigurasi lewat environment variable, default di
-`config.py`. Ringkasnya:
-- Market cap, holders, top-10 holder %, liquidity, volume 1h, price change 1h,
-  total fees, hot search visiting count.
-- ATH break (`signal_type == 7`) default sebagai bonus/highlight, bukan hard
-  filter (`REQUIRE_ATH_BREAK=true` untuk mengubahnya jadi wajib).
-- **Filter pool — Gate A, pairing (hard, wajib lolos)**:
-  - Pool harus ada dan terkonfirmasi (dari Krystal, DexPaprika, atau field
-    `quote_address` GMGN) — token ditolak (`no_eligible_quote_pair`) kalau
-    sama sekali tidak ada data pool yang bisa dikonfirmasi. Quote asset-nya
-    sendiri **bebas** (tidak lagi dibatasi whitelist ETH/WETH/USDG/dst) —
-    kualitas token ditentukan oleh Gate B di bawah plus filter lain (volume
-    organik, spike volume 5 menit, liquidity, holders, dll).
-
-- **Filter pool — Gate B, kualitas pool (hard, kriteria CEREBRO)**: begitu
-  pairing terkonfirmasi, `screener.select_best_sibling` mengumpulkan SEMUA
-  sibling pool token itu (fee tier berbeda-beda) dan menjalankan 2 layer:
-
-  **Layer 1** — hard filter per-pool (`screener.filter_pool_layer1`), tiap
-  pool harus lolos semua sekaligus:
-
-  | Metrik | Minimum default | Env var |
-  |---|---|---|
-  | TVL pool | ≥ $10.000 | `MIN_POOL_TVL` |
-  | Volume 24h (absolut) | ≥ $100.000 | `MIN_POOL_VOLUME_24H` |
-  | Fee 24h / TVL | ≥ 10% (0.1x) | `MIN_FEE_TVL_PCT` |
-
-  (Base fee tier & rasio Vol/TVL bukan lagi hard filter — digantikan
-  kriteria di atas dan entry gate di bawah. Fee Tier tetap ditampilkan.)
-
-  Sama seperti filter lain di bot ini: field yang datanya tidak tersedia
-  dari API manapun (mis. Krystal tidak pernah punya timestamp umur pool)
-  **di-skip untuk pool itu**, bukan me-reject-nya — data hilang tidak
-  diperlakukan sebagai data buruk.
-
-  **Umur pool BUKAN hard filter** — `MIN_POOL_AGE_DAYS` (default 7 hari)
-  cuma referensi "nice to have", bukan syarat wajib. Pool yang lebih muda
-  dari `NEW_POOL_WARNING_DAYS` (default 1 hari) tetap bisa lolos dan
-  dikirim notif, cuma ditandai tag "⚠️ Pool Baru" di badan notifikasi biar
-  user tahu dan bisa menilai sendiri — bukan otomatis ditolak.
-
-  **Layer 2** — seleksi antar sibling pool: kalau token punya ≥2 pool yang
-  lolos Layer 1, bot memilih SATU pemenang (bukan mengirim notif untuk
-  semua), lewat "jomplang check" — pool dengan volume jauh di bawah
-  sibling ter-ramai token itu (rasio < `SIBLING_VOLUME_RATIO_THRESHOLD`,
-  default 0.5) di-skip dari prioritas, lalu di antara sisanya dipilih base
-  fee tertinggi (tie-break volume tertinggi); kalau semua kandidat
-  jomplang, fallback ke volume tertinggi. Token ditolak (`pool_quality`)
-  kalau tidak ada satu pun sibling pool yang lolos Layer 1 — berbeda dari
-  `no_eligible_quote_pair` (itu berarti tidak ada data pool sama sekali;
-  ini berarti data pool ADA tapi tidak cukup bagus).
-
-  Hasil seleksi ditampilkan di notifikasi sebagai baris "Sibling Win".
-
-- **Field display tambahan (bukan filter)**: `Volume (6h)` dari
-  GeckoTerminal (biar kelihatan aktivitas 5 menit itu one-off blip atau
-  memang sustained sampai 6 jam), dan `Trades 24h` — jumlah buy/sell/swap
-  dari GMGN (`buys_24h`/`sells_24h`/`swaps_24h`) — banyak transaksi kecil
-  dari banyak wallet beda rasanya dengan 2-3 swap besar doang.
-
-- **Layer 3 — tag informational (tidak menggagalkan pool)**: ditampilkan di
-  notifikasi kalau datanya ada, tidak pernah jadi alasan reject.
-  - 🔥 **Momentum naik** — volume 1 jam dibanding rata-rata volume 24 jam
-    (per jam); tampil kalau rasionya di atas `MOMENTUM_RATIO_THRESHOLD`
-    (default 1.5x).
-  - ⚠️ **Pool Baru** — tampil kalau umur pool di bawah
-    `NEW_POOL_WARNING_DAYS` (default 1 hari). Bukan filter, cuma warning.
-  - 💡 **Fee vs Drawdown** — rasio Fee/TVL dibanding price drawdown 24 jam.
-    **Belum aktif**: tidak ada API yang terintegrasi di bot ini (GMGN,
-    Krystal, DexPaprika, Alchemy) yang menyediakan `price_change_24h` —
-    lihat "Phase 2 backlog" di bawah.
-
-- **Entry gate sebelum kirim** (`screener.passes_entry_gate`, dipanggil
-  dari `main.py`): replika 1:1 rule "Enter" di platform trading kamu —
-  SEMUA harus terpenuhi (AND). Data yang tidak ada = ditolak (fail-closed),
-  KECUALI Fee/TVL 1h/24h (kalau fee tier pool tidak diketahui) dan pullback
-  (kalau OHLCV & ATH tidak ada): dua itu di-skip dan ditandai
-  "⚠️ Tidak terverifikasi" di notif, karena datanya memang sering tidak
-  tersedia dari API manapun:
-
-  | Kriteria | Default | Env var |
-  |---|---|---|
-  | Pool TVL | ≥ $10.000 | `MIN_POOL_TVL` |
-  | Volume 24h | ≥ $100.000 | `MIN_POOL_VOLUME_24H` |
-  | Fee/TVL 1 jam | ≥ 0,5% (0.005x) | `ENTRY_MIN_1H_FEE_TVL_PCT` |
-  | Trades 1 jam | ≥ 10 | `ENTRY_MIN_1H_TRADES` |
-  | Price change 1 jam | -30% s/d +50% | `ENTRY_MIN_/MAX_1H_PRICE_CHANGE_PCT` |
-  | Fee/TVL 24 jam | ≥ 10% (0.1x) | `MIN_FEE_TVL_PCT` |
-  | Pullback dari high | ≤ 30% | `ENTRY_MAX_PULLBACK_FROM_HIGH_PCT` |
-  | Price change 5 menit | ≥ -3% | `ENTRY_MIN_5M_PRICE_CHANGE_PCT` |
-
-  Metrik 1 jam/5 menit hanya ada di GeckoTerminal (free tier 30 req/min),
-  jadi dicek di kandidat yang sudah menyempit (maks
-  `MAX_SPIKE_CHECK_CANDIDATES` per run); 1h fee = volume 1h × fee tier.
-  **Catatan pullback**: tidak ada API terintegrasi yang kasih "24h high",
-  jadi dihitung dari ATH market cap GMGN (ATH ≥ high 24h → pembacaan yang
-  lebih ketat); token tanpa data ATH ditolak. Spike-check 5 menit lama
-  dan bypass CEREBRO sudah dihapus.
-
-## Phase 2 backlog
-
-Item-item ini butuh sumber data baru yang belum ada integrasinya di bot ini
-— sengaja tidak diblokir dari rilis Phase 1 (overhaul filter pool CEREBRO):
-
-- **Fee/active-liquidity band** — data konsentrasi liquidity Uniswap V3
-  per tick range, perlu subgraph atau API khusus.
-- **Win rate historis LP di pool tsb** — perlu indexer/analytics pihak
-  ketiga yang melacak PnL wallet per pool, tidak disediakan GMGN/Krystal/
-  DexPaprika/Alchemy.
-- **Status smart-money address** (masih hold atau sudah keluar) — perlu
-  tracking wallet spesifik, di luar cakupan API token/pool yang ada.
-- **`price_change_24h`** untuk tag Layer 3 "Fee vs Drawdown" — field ini
-  tidak diekspos GMGN (hanya `price_change_percent1h` yang tersedia),
-  Krystal, maupun DexPaprika secara langsung.
-
-## Riwayat debugging (untuk referensi)
-
-Proses validasi menemukan beberapa bug nyata yang sudah diperbaiki:
-
-**GMGN** — domain awal (`api.gmgn.ai`) tidak resolve DNS sama sekali; domain
-benar adalah `https://openapi.gmgn.ai`. Auth pakai header `X-APIKEY` + query
-`timestamp`/`client_id` (bukan Bearer token). Response `hot_searches` nested
-per-chain (`data[0].tokens[]`), response `rank` nested dobel
-(`data.data.rank[]`) — bug ini bikin filter rank selalu dapat 0 data di
-beberapa run pertama. Field `ath` di `token_signal` adalah market cap, bukan
-harga.
-
-**Krystal** — domain awal yang ditemukan lewat `doc.json` (`api.krystal.app`)
-ternyata API internal aplikasi wallet Krystal, bukan "Krystal Cloud" (produk
-publik yang benar, di `cloud-api.krystal.app`). Endpoint yang benar
-`GET /v1/pools`, dan parameter `chainId` harus angka polos (`4663`), bukan
-string `"ethereum@4663"` seperti contoh di dokumentasi mereka sendiri —
-server API menolaknya dengan `400 Bad Request`. Response `token0`/`token1`
-juga dibungkus `{token: {...}, balance: ...}`, bukan objek Token langsung.
-
-Detail lengkap ada di riwayat commit `apis/gmgn.py` dan `apis/krystal.py`.
+- Fee tier on-chain (`fee()`, `Initialize` V4), alamat `PoolManager` Robinhood, dan `eth_simulateV1` di node Robinhood.
+- Sumber fee nyata (bukan perkiraan volume × tier); fee dinamis/hook V4 per pool.
+- Simulasi honeypot per DEX lewat router; pajak yang hanya aktif di jalur tertentu.
+- Konsentrasi holder; kualitas TVL GeckoTerminal untuk pool V4 tertentu (ada nilai tak wajar).

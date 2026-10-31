@@ -88,6 +88,7 @@ async def request_json(
     retries: int = 3,
     timeout: float = 10.0,
     backoff: float = 1.0,
+    rate_limit_wait: float = 6.0,
     sleep: Any = asyncio.sleep,
 ) -> Any:
     """JSON dari endpoint; retry (backoff eksponensial) pada 429/5xx/jaringan.
@@ -108,6 +109,9 @@ async def request_json(
                 ra = resp.headers.get("retry-after")
                 if ra and ra.isdigit() and attempt < retries:
                     await sleep(min(float(ra), 20.0))
+                    continue
+                if resp.status_code == 429 and attempt < retries:
+                    await sleep(rate_limit_wait * (attempt + 1))  # jendela rate limit ~menit: tunggu lebih lama
                     continue
             elif resp.status_code >= 400:
                 raise ApiError(f"HTTP {resp.status_code} {url}: {resp.text[:200]}")

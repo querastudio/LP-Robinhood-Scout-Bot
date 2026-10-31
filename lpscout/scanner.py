@@ -12,7 +12,7 @@ from .geckoterminal import GeckoClient
 from .metrics import compute_metrics
 from .models import Analysis, FeeInfo, Pool
 from .net import ApiError, TTLCache
-from .rpc import RpcClient
+from .rpc import RpcClient, RpcError
 from .security import check_token
 
 log = logging.getLogger("scanner")
@@ -44,6 +44,22 @@ class Scanner:
     def __init__(self, settings: config.Settings, gecko: GeckoClient, rpc: RpcClient | None,
                  cache: TTLCache, clock: Callable[[], float] = time.time) -> None:
         self.s, self.gecko, self.rpc, self.cache, self.clock = settings, gecko, rpc, cache, clock
+        self._rpc_checked = False
+
+    async def ensure_rpc(self) -> None:
+        """Pakai RPC hanya bila benar-benar Robinhood (chainId 4663); jaringan lain/rusak = dimatikan."""
+        if self._rpc_checked or self.rpc is None:
+            return
+        self._rpc_checked = True
+        try:
+            cid = await self.rpc.chain_id()
+        except RpcError as e:
+            log.warning("RPC tidak bisa dipakai (%s): fitur on-chain dimatikan", e)
+            self.rpc = None
+            return
+        if cid != config.CHAIN_ID:
+            log.warning("RPC_URL bukan Robinhood (chainId %s != %s): fitur on-chain dimatikan", cid, config.CHAIN_ID)
+            self.rpc = None
 
     def fee_24h(self, pool: Pool, fee: FeeInfo) -> float | None:
         """Perkiraan fee 24j = volume24h × fee tier × (1 − bagian protokol). Fee dinamis → None."""
@@ -52,16 +68,18 @@ class Scanner:
         return pool.volume_24h * fee.pct / 100 * (1 - self.s.protocol_fee_share)
 
     async def analyze(self, pool: Pool, fee: FeeInfo | None = None) -> Analysis:
+        await self.ensure_rpc()
         side = prefilter.volatile_side(pool, self.s)
         fee = fee or await resolve_fee(pool, self.s, self.rpc, self.cache, verify=True)
         a = Analysis(pool=pool, fee=fee, fee_24h_est=self.fee_24h(pool, fee))
         a.volatile_change_24h = prefilter.volatile_change(pool, side, "h24") if side else None
         m = None
+        fetch_error = None
         if pool.quote_price_usd and pool.tvl_usd:
             try:
                 candles = await self.gecko.get_candles(pool.address)
             except ApiError as e:
-                a.missing.append(f"candle gagal diambil: {e}")
+                fetch_error = f"candle gagal diambil dari GeckoTerminal ({str(e)[:60]})"
                 candles = []
             m = compute_metrics(candles, pool.quote_price_usd, a.fee_24h_est, pool.tvl_usd,
                                 self.clock(), self.s.min_candles)
@@ -76,11 +94,14 @@ class Scanner:
             a.security = await check_token(token, pool, holder, self.s, self.rpc, self.cache)
             a.label, a.missing, a.downgraded = labels.classify(
                 m, pool.tvl_usd or 0, a.volatile_change_24h, a.security, self.s, fee_known)
+        if m is None and fetch_error and a.label == "tolak":
+            a.missing = [fetch_error]
         a.size_pct = labels.SIZE_PCT[a.label]
         return a
 
     async def scan(self) -> ScanResult:
         res = ScanResult(ts=self.clock())
+        await self.ensure_rpc()
         pools = await self.gecko.list_pools(self.s.scan_pages)
         res.listed = len(pools)
         eligible = [p for p in pools if prefilter.reject_reason(p, self.s) is None]

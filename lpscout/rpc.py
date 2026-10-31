@@ -53,6 +53,9 @@ class RpcClient:
             raise RpcError("respons RPC tidak valid")
         return data["result"]
 
+    async def chain_id(self) -> int:
+        return int(str(await self.call("eth_chainId", [])), 16)
+
     async def eth_call(self, to: str, data: str, from_: str | None = None) -> str:
         tx: dict[str, str] = {"to": to, "data": data}
         if from_:

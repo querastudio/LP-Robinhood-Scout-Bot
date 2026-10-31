@@ -61,7 +61,7 @@ async def run_once(settings: config.Settings) -> None:
         for u in await rt.tg.get_updates(int(rt.bot.store.data["last_update_id"]) + 1):
             await rt.bot.dispatch(u)
         rt.save()
-        await rt.bot.auto_scan_if_due()
+        await _safe_auto(rt.bot)
         await rt.bot.drain()
     finally:
         rt.save()
@@ -90,9 +90,33 @@ async def _safe_auto(bot: Bot) -> bool:
         return False
 
 
+async def run_dry(settings: config.Settings) -> None:
+    """Scan nyata tanpa Telegram/state: cetak laporan ke stdout (untuk uji manual)."""
+    from lpscout import formatter
+
+    rt = build(settings)
+    try:
+        res = await rt.bot.scanner_for(settings).scan()
+        passing = [a for a in res.analyzed if a.label != "tolak"]
+        close = formatter.nearest(res.analyzed, settings.rules["minimal"]) if not passing else None
+        print(f"[dry] listed={res.listed} eligible={res.eligible} fee_unknown={res.fee_unknown} "
+              f"analyzed={len(res.analyzed)} errors={len(res.errors)} counts={res.counts()}")
+        for a in res.analyzed:
+            m = a.metrics
+            print(f"[dry] {a.label:8s} {a.pool.name:28s} {a.pool.dex_id:24s} fee={a.fee.pct} "
+                  f"fy={'-' if not m or m.fee_yield is None else round(m.fee_yield, 3)} "
+                  f"missing={a.missing[:2]}")
+        print("\n" + formatter.build_report(res.ts, res.listed, res.counts(), passing, close))
+    finally:
+        await rt.http.aclose()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     settings = config.load()
+    if "--dry-scan" in sys.argv:
+        asyncio.run(run_dry(settings))
+        return
     if not settings.telegram_token or not settings.owner_id:
         log.error("TELEGRAM_BOT_TOKEN dan TELEGRAM_OWNER_ID wajib diisi.")
         sys.exit(1)

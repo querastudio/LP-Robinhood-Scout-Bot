@@ -62,7 +62,7 @@ def _name_fee(pool: Pool, family_: str) -> FeeInfo:
         return FeeInfo(None, "tidak diketahui", note="fee tier tidak ada di nama pool dan tidak terbaca on-chain")
     note = None
     if family_ == "v4":
-        note = "V4: hook/fee dinamis tidak terverifikasi — tier statis dari nama pool"
+        note = "V4: hook/fee dinamis tidak terverifikasi; tier statis dari nama pool (dibulatkan GeckoTerminal)"
     return FeeInfo(pool.fee_pct_from_name, "nama pool", note=note)
 
 

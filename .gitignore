@@ -1,4 +1,7 @@
 __pycache__/
 *.pyc
 .env
-cooldown_cache.json
+data/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

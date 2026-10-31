@@ -90,7 +90,7 @@ class Settings:
     cache_path: str = "data/cache.json"
     rules: dict[str, LabelRule] = field(default_factory=dict)
 
-    def with_overrides(self, **kw: object) -> "Settings":
+    def with_overrides(self, **kw: object) -> Settings:
         return replace(self, **kw)  # type: ignore[arg-type]
 
 

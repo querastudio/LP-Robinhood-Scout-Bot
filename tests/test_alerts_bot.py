@@ -92,6 +92,7 @@ class FakeScanner:
     def __init__(self, analyses, delay=0.0):
         self.analyses, self.delay = analyses, delay
         self.gecko = self
+        self.pages_ok = 1
 
     async def scan(self):
         await asyncio.sleep(self.delay)

@@ -130,7 +130,7 @@ class Bot:
         }
         self.store.add_history({
             "ts": res.ts, "listed": res.listed, "eligible": res.eligible, "fee_unknown": res.fee_unknown,
-            "counts": res.counts(), "errors": len(res.errors),
+            "counts": res.counts(), "errors": res.errors[:5], "pages_ok": res.pages_ok,
             "pools": [{
                 "address": a.pool.address, "pair": formatter.pair_name(a), "dex": a.pool.dex_id, "label": a.label,
                 "fee_pct": a.fee.pct, "tvl": a.pool.tvl_usd,

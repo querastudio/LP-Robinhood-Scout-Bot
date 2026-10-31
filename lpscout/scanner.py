@@ -27,6 +27,8 @@ class ScanResult:
     fee_unknown: int = 0
     analyzed: list[Analysis] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    pages_ok: int = 0
+    pages_wanted: int = 0
 
     def counts(self) -> dict[str, int]:
         c = {k: 0 for k in labels.ORDER}
@@ -104,6 +106,9 @@ class Scanner:
         await self.ensure_rpc()
         pools = await self.gecko.list_pools(self.s.scan_pages)
         res.listed = len(pools)
+        res.pages_ok, res.pages_wanted = self.gecko.pages_ok, self.s.scan_pages
+        if res.pages_ok < res.pages_wanted and res.listed < res.pages_wanted * 20:
+            res.errors.append(f"daftar pool hanya {res.pages_ok}/{res.pages_wanted} halaman (rate limit GeckoTerminal)")
         eligible = [p for p in pools if prefilter.reject_reason(p, self.s) is None]
         res.eligible = len(eligible)
         eligible.sort(key=lambda p: (p.volume_24h or 0) / (p.tvl_usd or 1), reverse=True)

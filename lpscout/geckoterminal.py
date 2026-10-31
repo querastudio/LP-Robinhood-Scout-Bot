@@ -126,6 +126,7 @@ class GeckoClient:
         self._owns = client is None
         self.cache = cache or TTLCache()
         self.throttle = throttle or Throttle(settings.gt_min_interval)
+        self.pages_ok = 0  # halaman daftar yang berhasil pada list_pools terakhir
 
     async def aclose(self) -> None:
         if self._owns:
@@ -139,6 +140,7 @@ class GeckoClient:
 
     async def list_pools(self, pages: int, sort: str = "h24_volume_usd_desc") -> list[Pool]:
         out: list[Pool] = []
+        self.pages_ok = 0
         for page in range(1, pages + 1):
             key = f"gt:list:{sort}:{page}"
             cached = self.cache.get(key)
@@ -151,6 +153,7 @@ class GeckoClient:
                     break  # halaman lanjutan gagal: pakai yang sudah ada
                 self.cache.set(key, cached, self.LIST_TTL)
             got = parse_pools(cached)
+            self.pages_ok += 1
             out.extend(got)
             if len(got) < 20:
                 break
